@@ -40,7 +40,7 @@ export interface AppOptions {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_PORT = Number(process.env['PORT'] ?? 3001);
+const DEFAULT_PORT = Number(process.env['PORT'] ?? 8787);
 
 /** Allowed origins for CORS / origin-check. */
 const ALLOWED_ORIGINS: Set<string> = new Set([

@@ -134,9 +134,13 @@ export async function complete(prompt: string, opts?: CompleteOptions): Promise<
       if (!apiKey) {
         throw new Error('LLM_UNAVAILABLE: ANTHROPIC_API_KEY missing at call time');
       }
+      const model = process.env['ANTHROPIC_MODEL'];
+      if (!model) {
+        throw new Error('LLM_UNAVAILABLE: ANTHROPIC_MODEL missing — define el modelo Anthropic en .env (sin default; ningún modelo se asume)');
+      }
       const client = new Anthropic({ apiKey });
       const message = await client.messages.create({
-        model: 'claude-opus-4-5',
+        model,
         max_tokens: maxTokens,
         temperature,
         messages: [{ role: 'user', content: prompt }],

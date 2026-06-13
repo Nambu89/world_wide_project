@@ -128,7 +128,7 @@ export async function generateDailyBriefing(): Promise<Briefing> {
     if (activeProvider === 'openai') {
       modelUsed = `openai/${process.env['OPENAI_MODEL']}`;
     } else if (activeProvider === 'claude') {
-      modelUsed = 'claude-opus-4-5';
+      modelUsed = `claude/${process.env['ANTHROPIC_MODEL']}`;
     } else {
       modelUsed = activeProvider;
     }
