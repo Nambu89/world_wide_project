@@ -18,3 +18,4 @@
 - LECCIÓN proceso: el `schema` forzado en Workflow y los prompts largos matan a los subagentes especialistas (límite de turnos ~30). Lo que funcionó: dispatch directo texto-libre + prompts acotados (escribe-ficheros-primero) + verificación del PM via Bash.
 - PENDIENTE integración: commit (aprobación humana), .env con ANTHROPIC_API_KEY (hooks bloquean que lo cree un agente).
 - MVP Finanzas (Fase 1) COMPLETO Y VERIFIED. Siguiente: Fase 2 (Educación/Política completas + CII).
+- [2026-06-13] QA E2E post-fix contraste: PASS. 7/7 instrumentos, mapa OK, responsive OK. 0 bugs. Ver plans/qa-report-2026-06-13.md.
