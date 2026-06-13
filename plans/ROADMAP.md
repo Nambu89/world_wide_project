@@ -1,6 +1,6 @@
 # ROADMAP — world_wide_project
 
-Progreso global: `██████░░░░ 62% (10/16)` — **Fase 1 (MVP Finanzas) COMPLETA y VERIFIED** (waves 1-6, gate /verify pasado). 99 tests verdes. Pendiente integración: commit (aprobación humana) + `.env` del usuario. Siguiente fase: 2 (dominios completos + CII).
+Progreso global: `██████░░░░ 62% (10/16)` — **Fase 1 (MVP Finanzas) CERRADA**: /verify VERIFIED + QA E2E Playwright PASS + OpenAI gpt-5.4 live + cold-start fix. 10 commits en `main`. Siguiente: **Fase 2** (RPI Research+Design en curso).
 
 > Prioridad: **Alta** = MVP, **Media** = dominios completos, **Baja** = pulido. Marca `[x]` al completar (con `verifier` = VERIFIED).
 
@@ -23,7 +23,7 @@ Progreso global: `██████░░░░ 62% (10/16)` — **Fase 1 (MVP 
 
 ## Fase 2 — Dominios + scoring
 - [ ] **Media** — Completar Finanzas (FRED/EIA/sanctions), Educación (rss-proxy + clustering ONNX), Política (ACLED/UCDP/country-risk)
-- [ ] **Media** — `packages/core/cii/` CII re-implementado + histórico/tendencias
+- [ ] **Media** — `packages/core/cii/` CII re-implementado + histórico/tendencias *(design-doc ✅ `docs/design/2026-06-13-cii-scoring.md`; PHASE-SPLIT: solo componente Information activo hoy, resto se desbloquea con conectores keyed; pendiente ratificar OQs → plan → /check-plan)*
 
 ## Fase 3 — Síntesis IA + correlación
 - [ ] **Media** — Router completo `ollama → groq → claude` + personas/plantillas de briefing por dominio
