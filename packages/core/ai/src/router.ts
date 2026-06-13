@@ -115,9 +115,10 @@ export async function complete(prompt: string, opts?: CompleteOptions): Promise<
         throw new Error('LLM_UNAVAILABLE: OPENAI_MODEL missing — define el modelo OpenAI en .env (sin default; ningún modelo se asume)');
       }
       const client = new OpenAI({ apiKey });
+      // Modelos OpenAI nuevos (GPT-5.x) usan max_completion_tokens, no el legacy max_tokens.
       const response = await client.chat.completions.create({
         model,
-        max_tokens: maxTokens,
+        max_completion_tokens: maxTokens,
         temperature,
         messages: [{ role: 'user', content: prompt }],
       });
