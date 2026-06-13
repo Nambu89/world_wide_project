@@ -1,0 +1,20 @@
+{
+  "$comment": "Companion config for ../quality-check.js. Documents the hook contract for the world_wide_project Vite+React+MapLibre package (packages/web). The hook itself reads these values inline; this file is the human/agent-facing source of truth for them.",
+  "name": "quality-check",
+  "trigger": "PostToolUse",
+  "matcher": "Write|Edit|MultiEdit",
+  "filePatterns": ["packages/web/src/**/*.{ts,tsx}"],
+  "frontendDir": "packages/web",
+  "tsconfig": "packages/web/tsconfig.json",
+  "command": "npx --no-install tsc --noEmit -p tsconfig.json",
+  "timeout": 30000,
+  "mode": "warn",
+  "blocking": false,
+  "cacheFile": "packages/web/.tsconfig-hash-cache.json",
+  "maxErrorLines": 10,
+  "notes": [
+    "WARN mode: exit 0 always. Surfaces tsc errors as additionalContext + stderr but never blocks.",
+    "The implementing agent's own auto-verification (pnpm -w build / tsc --noEmit) is the authoritative gate.",
+    "To make this hook BLOCKING on type errors, change process.exit(0) in quality-check.js's error branch to process.exit(2)."
+  ]
+}

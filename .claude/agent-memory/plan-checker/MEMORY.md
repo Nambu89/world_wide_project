@@ -1,0 +1,3 @@
+- [Plan referencia D-NN multiple veces a proposito](false-positive-id-dup.md) — spec-validator marca "IDs ADR/D duplicados" en planes: FALSO POSITIVO, las refs son trazabilidad de cobertura, no definiciones
+- [.env / .env.* no son legibles para los agentes](env-not-readable.md) — hooks bloquean Read/Bash sobre .env*; el contrato de variables se valida contra SECRETS.md + en T-01 (GAP-2)
+- [Set canonico de variables de entorno](env-vars-canonical.md) — lista en .claude/SECRETS.md; ojo: incluye TURSO_* aunque el MVP usa libSQL file:// local (ADR-006)

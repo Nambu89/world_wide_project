@@ -1,0 +1,415 @@
+/* ============================================================
+   Design tokens — single source of truth
+   ============================================================ */
+:root {
+  /* Colors */
+  --color-bg-primary: #0f172a;
+  --color-bg-surface: #1e293b;
+  --color-bg-elevated: #293548;
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #94a3b8;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2563eb;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-border: #334155;
+
+  /* Typography */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Rounded */
+  --rounded-sm: 4px;
+  --rounded-md: 8px;
+  --rounded-lg: 12px;
+  --rounded-pill: 9999px;
+
+  /* Shadows */
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Layout */
+  --panel-width-desktop: 360px;
+  --panel-height-mobile: 50vh;
+  --drawer-handle-height: 48px;
+
+  /* Breakpoints (reference only — use media queries below) */
+  --bp-mobile: 375px;
+  --bp-desktop: 1200px;
+
+  /* Touch targets */
+  --touch-target-min: 44px;
+}
+
+/* ============================================================
+   Reset & base
+   ============================================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: var(--font-family);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   App layout — mobile-first
+   ============================================================ */
+
+/* Mobile: map fills viewport, panel overlays as drawer */
+.app-layout {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.map-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ============================================================
+   Panel / Drawer — mobile-first (drawer over map)
+   ============================================================ */
+.panel-wrapper {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--panel-height-mobile);
+  background-color: var(--color-bg-surface);
+  border-top-left-radius: var(--rounded-lg);
+  border-top-right-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.3s ease;
+  z-index: 10;
+}
+
+.panel-wrapper.collapsed {
+  transform: translateY(calc(100% - var(--drawer-handle-height)));
+}
+
+.panel-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--drawer-handle-height);
+  min-height: var(--touch-target-min);
+  cursor: pointer;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.panel-handle-bar {
+  width: 40px;
+  height: 4px;
+  background-color: var(--color-border);
+  border-radius: var(--rounded-pill);
+}
+
+.panel-handle-title {
+  position: absolute;
+  left: var(--space-4);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* ============================================================
+   Desktop: side panel layout
+   ============================================================ */
+@media (min-width: 1200px) {
+  .map-container {
+    right: var(--panel-width-desktop);
+  }
+
+  .panel-wrapper {
+    top: 0;
+    bottom: 0;
+    left: auto;
+    right: 0;
+    width: var(--panel-width-desktop);
+    height: 100%;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    border-left: 1px solid var(--color-border);
+    transform: none !important;
+  }
+
+  .panel-handle {
+    display: none;
+  }
+}
+
+/* ============================================================
+   Layer toggle bar (top of map)
+   ============================================================ */
+.layer-toggles {
+  position: absolute;
+  top: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  gap: var(--space-2);
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-pill);
+  padding: var(--space-1) var(--space-2);
+  box-shadow: var(--shadow-md);
+}
+
+.layer-toggle-btn {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--rounded-pill);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.layer-toggle-btn.active {
+  background-color: var(--color-accent);
+  color: #fff;
+}
+
+.layer-toggle-btn:hover:not(.active) {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+/* ============================================================
+   Finance Panel internals
+   ============================================================ */
+.finance-panel {
+  padding: var(--space-4);
+}
+
+.finance-panel__heading {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  margin-bottom: var(--space-4);
+  color: var(--color-text-primary);
+}
+
+/* State: loading */
+.state-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+  gap: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* State: empty */
+.state-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+  gap: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+.state-empty__icon {
+  font-size: 2rem;
+  opacity: 0.5;
+}
+
+/* State: error */
+.state-error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background-color: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--rounded-md);
+  margin: var(--space-4);
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.state-error__title {
+  font-weight: var(--font-weight-bold);
+}
+
+.state-error__retry {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-danger);
+  color: #fff;
+  border: none;
+  border-radius: var(--rounded-sm);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  min-height: var(--touch-target-min);
+  align-self: flex-start;
+}
+
+/* Instrument list */
+.instrument-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.instrument-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.instrument-card:hover {
+  border-color: var(--color-accent);
+}
+
+.instrument-card.selected {
+  border-color: var(--color-accent);
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.instrument-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.instrument-card__symbol {
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+}
+
+.instrument-card__name {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+}
+
+.instrument-card__price {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  text-align: right;
+}
+
+.instrument-card__change {
+  font-size: var(--font-size-xs);
+  text-align: right;
+}
+
+.instrument-card__change.positive {
+  color: var(--color-success);
+}
+
+.instrument-card__change.negative {
+  color: var(--color-danger);
+}
+
+.instrument-card__change.neutral {
+  color: var(--color-text-secondary);
+}
+
+/* Sparkline */
+.sparkline-area {
+  margin-top: var(--space-2);
+}
+
+.sparkline-title {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.sparkline-canvas {
+  width: 100%;
+  height: 48px;
+  display: block;
+}
+
+.sparkline-loading {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+/* ============================================================
+   MapLibre overrides (keep attribution visible)
+   ============================================================ */
+.maplibregl-ctrl-attrib {
+  font-size: 10px !important;
+  opacity: 0.7;
+}

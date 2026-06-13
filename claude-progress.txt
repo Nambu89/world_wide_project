@@ -1,0 +1,20 @@
+=== world_wide_project — log de progreso ===
+
+[2026-06-13] Fase 0 — Fundación
+- Investigación de fusión completada → INVESTIGACION-FUSION.md (osiris MIT + worldmonitor AGPL + dev-system TaxIA).
+- Sistema de desarrollo multi-agente instalado en .claude/ (11 agentes, 17 comandos, 7 skills, 5 hooks, README/AGENT-CONTRACTS/SECRETS).
+- Blackboard sembrado: CLAUDE.md, plans/ROADMAP.md, plans/DECISIONS.md (ADR-001..004), agent-comms.md, memory/MEMORY.md + 5 feedback_*.md.
+- Estado: código de producto NO empezado. Siguiente: fijar alcance del MVP (/design o brainstorming) y arrancar Fase 1.
+
+[2026-06-13] Fase 1 — MVP Finanzas (RPI completo)
+- Interrogación PM resolvió 3 conflictos de la propuesta → ADR-005 (IA=Anthropic Claude, rama activa del router), ADR-006 (persistencia @libsql/client file:// local), ADR-007 (pnpm + .venv). Usuario añadió ADR-008 (UI responsive + mobile-first).
+- /design → system-architect → docs/design/2026-06-13-mvp-finanzas.md (verificado en disco).
+- Plan plans/2026-06-13-mvp-finanzas.md (7 tareas, 6 waves) → /check-plan = PASS (plan-checker).
+- Usuario aprobó. Cadencia: wave a wave con checkpoint.
+- WAVE 1 / T-01 (bootstrap) DONE+VERIFIED: pnpm workspace 6 proyectos, 5 paquetes @www/*, .venv, data/. R-1 SUPERADO (libsql nativo ejecuta queries en Windows). typecheck 5 pkgs verde, tsx OK. Pendiente usuario: crear .env con ANTHROPIC_API_KEY.
+- Siguiente: Wave 2 = T-02 (packages/store schema time-series).
+- WAVES 2-6 COMPLETADAS (paralelizadas donde seguro, a petición del usuario): store (12 tests), 3 conectores keyless osiris (46 tests), core/ai router+briefing (17 tests), scheduler 4 tiers (15 tests), server.ts node:http 5 endpoints (9 tests). Fixes de integración del PM: barrel @www/connectors + tsconfig layout canónico, getRecentGdeltEvents en store, briefing grounded en GDELT (D-105), 4 tipos MapLibre v4 en web. web Vite+React+MapLibre config-array + panel responsive (vite build OK).
+- GATE /verify = VERIFIED: typecheck 5 paquetes + server, 99 tests/99 pass/0 fail, web build OK, decisiones cumplidas, sin stubs.
+- LECCIÓN proceso: el `schema` forzado en Workflow y los prompts largos matan a los subagentes especialistas (límite de turnos ~30). Lo que funcionó: dispatch directo texto-libre + prompts acotados (escribe-ficheros-primero) + verificación del PM via Bash.
+- PENDIENTE integración: commit (aprobación humana), .env con ANTHROPIC_API_KEY (hooks bloquean que lo cree un agente).
+- MVP Finanzas (Fase 1) COMPLETO Y VERIFIED. Siguiente: Fase 2 (Educación/Política completas + CII).

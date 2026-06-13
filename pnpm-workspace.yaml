@@ -1,0 +1,11 @@
+packages:
+  - 'packages/*'
+  - 'packages/core/*'
+
+allowBuilds:
+  esbuild: true
+
+# esbuild (vía vite/tsx) necesita su build-script para bajar el binario nativo.
+# pnpm 11 lee esto desde aquí (ya no desde el campo "pnpm" de package.json).
+onlyBuiltDependencies:
+  - esbuild

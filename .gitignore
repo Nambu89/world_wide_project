@@ -1,0 +1,84 @@
+# ─────────────────────────────────────────────────────────────────────────
+# world_wide_project — .gitignore
+# Secrets NEVER touch git. This is the fix for the TaxIA leak (secrets had
+# ended up inside Bash permission strings in settings.local.json).
+# ─────────────────────────────────────────────────────────────────────────
+
+# --- Secrets / environment (NEVER COMMIT) ---
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+id_rsa
+id_rsa.*
+**/secrets/
+**/credentials/
+*credentials*.json
+*client_secret*.json
+*service-account*.json
+
+# --- Claude Code local machine config (machine-specific, may hold host allow-lists) ---
+.claude/settings.local.json
+.claude/hooks/**/.tsconfig-hash-cache.json
+.claude/hooks/.tsconfig-hash-cache.json
+
+# --- Node / pnpm ---
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Python venv (tools/py/.venv, ADR-007) ---
+.venv/
+**/.venv/
+
+# --- Build output / caches ---
+dist/
+build/
+out/
+.vite/
+.turbo/
+*.tsbuildinfo
+.tsconfig-hash-cache.json
+coverage/
+.nyc_output/
+
+# --- Turso / local DB artifacts ---
+*.db
+*.sqlite
+*.sqlite3
+local.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Test / Playwright artifacts ---
+test-results/
+playwright-report/
+playwright/.cache/
+.last-run.json
+
+# --- Git worktrees (parallel agent isolation) ---
+.worktrees/
+
+# --- Editor / OS ---
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# --- Logs ---
+*.log
+logs/
