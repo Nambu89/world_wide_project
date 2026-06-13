@@ -27,11 +27,8 @@ function eventsToGeoJSON(events: GdeltEvent[]): GeoJSON.FeatureCollection {
       },
       properties: {
         eventId: e.eventId,
-        eventCode: e.eventCode,
-        goldstein: e.goldstein,
-        tone: e.tone,
-        url: e.url,
-        date: e.date,
+        category: e.category,
+        severity: e.severity,
       },
     })),
   };
