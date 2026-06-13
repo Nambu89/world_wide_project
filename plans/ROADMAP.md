@@ -22,6 +22,7 @@ Progreso global: `██████░░░░ 62% (10/16)` — **Fase 1 (MVP 
 - [x] **Alta** — `server.ts` cableado connectors + scheduler + api ✅ pipeline seguridad + 5 endpoints, 9 tests
 
 ## Fase 2 — Dominios + scoring
+- [ ] **Alta** — **Capa de eventos globales multi-fuente** (ADR-010, 1ª rebanada) — design-doc ✅ `docs/design/2026-06-13-global-events.md`. MVP keyless: USGS terremotos + NASA EONET (naturales) + GDELT raw Events CSV (conflicto, coords reales). Tabla `events` unificada + capas mapa por tipo. Diferidas: ReliefWeb/UCDP/ACLED (key/gated). Pendiente: plan → /check-plan → implementar.
 - [ ] **Media** — Completar Finanzas (FRED/EIA/sanctions), Educación (rss-proxy + clustering ONNX), Política (ACLED/UCDP/country-risk)
 - [ ] **Media** — `packages/core/cii/` CII re-implementado + histórico/tendencias *(design-doc ✅ `docs/design/2026-06-13-cii-scoring.md`; PHASE-SPLIT: solo componente Information activo hoy, resto se desbloquea con conectores keyed; pendiente ratificar OQs → plan → /check-plan)*
 
