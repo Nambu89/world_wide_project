@@ -1,14 +1,19 @@
 // packages/core/ai/test/ai.test.ts
 // Tests de @www/core-ai (node:test)
 //
-// Criterios gradeables:
-//   1. resolveChain() marca ollama y groq como available:false (sin keys).
-//   2. resolveChain() marca claude available:true cuando ANTHROPIC_API_KEY presente.
-//   3. resolveChain() marca claude available:false cuando ANTHROPIC_API_KEY ausente.
-//   4. pickProvider() devuelve null cuando ningún proveedor disponible.
-//   5. generateDailyBriefing() con caché válida NO llama a Anthropic (mock que cuenta llamadas).
-//   6. serializeContext() produce texto coherente con los datos de entrada.
-//   7. generateDailyBriefing() sin proveedor degrada a mensaje "no disponible".
+// Criterios gradeables (ADR-009: openai rama activa):
+//   1. resolveChain() tiene exactamente 4 proveedores: ollama, openai, groq, claude.
+//   2. resolveChain() marca ollama available:false siempre (MVP).
+//   3. resolveChain() marca openai available:true cuando OPENAI_API_KEY presente.
+//   4. resolveChain() marca openai available:false cuando OPENAI_API_KEY ausente.
+//   5. resolveChain() marca groq available:false sin GROQ_API_KEY.
+//   6. resolveChain() marca claude available:false sin ANTHROPIC_API_KEY.
+//   7. resolveChain() marca claude available:true cuando ANTHROPIC_API_KEY presente.
+//   8. pickProvider() devuelve null cuando ningún proveedor disponible.
+//   9. pickProvider() devuelve 'openai' cuando OPENAI_API_KEY está presente (rama activa MVP).
+//  10. generateDailyBriefing() con caché válida NO llama a OpenAI (mock que cuenta llamadas).
+//  11. serializeContext() produce texto coherente con los datos de entrada.
+//  12. generateDailyBriefing() sin proveedor degrada a mensaje "no disponible".
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,6 +71,15 @@ const NOW = Date.now();
 // ─── Suite 1: resolveChain() ──────────────────────────────────────────────────
 
 describe('resolveChain()', () => {
+  test('cadena tiene exactamente 4 proveedores en orden', () => {
+    const chain = resolveChain();
+    assert.equal(chain.length, 4, 'debe tener 4 proveedores');
+    assert.equal(chain[0]?.provider, 'ollama');
+    assert.equal(chain[1]?.provider, 'openai');
+    assert.equal(chain[2]?.provider, 'groq');
+    assert.equal(chain[3]?.provider, 'claude');
+  });
+
   test(
     'ollama siempre available:false en MVP',
     withEnv({}, async () => {
@@ -73,6 +87,27 @@ describe('resolveChain()', () => {
       const ollama = chain.find((s) => s.provider === 'ollama');
       assert.ok(ollama, 'ollama debe estar en la cadena');
       assert.equal(ollama.available, false, 'ollama debe ser available:false');
+    }),
+  );
+
+  test(
+    'openai available:true cuando OPENAI_API_KEY presente',
+    withEnv({ OPENAI_API_KEY: 'test-openai-key-abc123' }, async () => {
+      const chain = resolveChain();
+      const openai = chain.find((s) => s.provider === 'openai');
+      assert.ok(openai, 'openai debe estar en la cadena');
+      assert.equal(openai.available, true, 'openai debe ser available:true con key');
+    }),
+  );
+
+  test(
+    'openai available:false cuando OPENAI_API_KEY ausente',
+    withEnv({ OPENAI_API_KEY: undefined }, async () => {
+      const chain = resolveChain();
+      const openai = chain.find((s) => s.provider === 'openai');
+      assert.ok(openai, 'openai debe estar en la cadena');
+      assert.equal(openai.available, false, 'openai debe ser available:false sin key');
+      assert.ok(openai.reason?.includes('OPENAI_API_KEY'), 'reason debe mencionar OPENAI_API_KEY');
     }),
   );
 
@@ -88,7 +123,7 @@ describe('resolveChain()', () => {
 
   test(
     'claude available:true cuando ANTHROPIC_API_KEY presente',
-    withEnv({ ANTHROPIC_API_KEY: 'test-key-abc123' }, async () => {
+    withEnv({ ANTHROPIC_API_KEY: 'test-anthropic-key-abc123' }, async () => {
       const chain = resolveChain();
       const claude = chain.find((s) => s.provider === 'claude');
       assert.ok(claude, 'claude debe estar en la cadena');
@@ -105,14 +140,6 @@ describe('resolveChain()', () => {
       assert.equal(claude.available, false, 'claude debe ser available:false sin key');
     }),
   );
-
-  test('cadena tiene exactamente 3 proveedores en orden', () => {
-    const chain = resolveChain();
-    assert.equal(chain.length, 3);
-    assert.equal(chain[0]?.provider, 'ollama');
-    assert.equal(chain[1]?.provider, 'groq');
-    assert.equal(chain[2]?.provider, 'claude');
-  });
 });
 
 // ─── Suite 2: pickProvider() ──────────────────────────────────────────────────
@@ -120,17 +147,49 @@ describe('resolveChain()', () => {
 describe('pickProvider()', () => {
   test(
     'devuelve null cuando ningún proveedor disponible',
-    withEnv({ ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
+    withEnv({
+      OPENAI_API_KEY: undefined,
+      ANTHROPIC_API_KEY: undefined,
+      GROQ_API_KEY: undefined,
+    }, async () => {
       const result = pickProvider();
       assert.equal(result, null, 'debe devolver null cuando no hay keys');
     }),
   );
 
   test(
-    'devuelve "claude" cuando solo ANTHROPIC_API_KEY está presente',
-    withEnv({ ANTHROPIC_API_KEY: 'test-key', GROQ_API_KEY: undefined }, async () => {
+    'devuelve "openai" cuando OPENAI_API_KEY está presente (rama activa MVP)',
+    withEnv({
+      OPENAI_API_KEY: 'test-openai-key',
+      ANTHROPIC_API_KEY: undefined,
+      GROQ_API_KEY: undefined,
+    }, async () => {
       const result = pickProvider();
-      assert.equal(result, 'claude');
+      assert.equal(result, 'openai', 'openai debe ser el primer proveedor disponible con su key');
+    }),
+  );
+
+  test(
+    'devuelve "claude" cuando solo ANTHROPIC_API_KEY está presente',
+    withEnv({
+      OPENAI_API_KEY: undefined,
+      ANTHROPIC_API_KEY: 'test-anthropic-key',
+      GROQ_API_KEY: undefined,
+    }, async () => {
+      const result = pickProvider();
+      assert.equal(result, 'claude', 'claude debe ser disponible cuando anthropic key presente y openai ausente');
+    }),
+  );
+
+  test(
+    'openai tiene prioridad sobre claude cuando ambas keys presentes',
+    withEnv({
+      OPENAI_API_KEY: 'test-openai-key',
+      ANTHROPIC_API_KEY: 'test-anthropic-key',
+      GROQ_API_KEY: undefined,
+    }, async () => {
+      const result = pickProvider();
+      assert.equal(result, 'openai', 'openai debe ganar sobre claude por posición en la cadena');
     }),
   );
 });
@@ -224,7 +283,7 @@ describe('buildBriefingPrompt()', () => {
   });
 });
 
-// ─── Suite 5: generateDailyBriefing() — caché válida NO llama Anthropic ───────
+// ─── Suite 5: generateDailyBriefing() — caché válida NO llama a OpenAI ────────
 
 describe('generateDailyBriefing()', () => {
   beforeEach(async () => {
@@ -240,32 +299,36 @@ describe('generateDailyBriefing()', () => {
   });
 
   test(
-    'con caché válida NO llama a Anthropic (mock que cuenta llamadas)',
-    withEnv({ ANTHROPIC_API_KEY: undefined }, async () => {
+    'con caché válida NO llama a OpenAI (mock que cuenta llamadas)',
+    withEnv({ OPENAI_API_KEY: undefined, ANTHROPIC_API_KEY: undefined }, async () => {
       // Guardamos un briefing válido en la DB (valid_until = now + 1h)
       const validBriefing: Briefing = {
         domain: 'finance',
         body_md: '# Briefing de prueba\n\nContenido cacheado.',
-        model: 'claude-opus-4-5',
+        model: 'openai/test-model',
         created_at: NOW - 1000,
         valid_until: NOW + 60 * 60 * 1000, // expira en 1h
       };
       await saveBriefing(validBriefing);
 
-      // Sin ANTHROPIC_API_KEY: si generateDailyBriefing llama a Anthropic, lanzaría error.
+      // Sin OPENAI_API_KEY: si generateDailyBriefing llama a OpenAI, lanzaría error.
       // Si NO lanza y devuelve el briefing cacheado, la prueba pasa.
-      // Esto verifica implícitamente que NO se llamó a Anthropic.
+      // Esto verifica implícitamente que NO se llamó a OpenAI (D-106 caché 24h).
       const result = await generateDailyBriefing();
 
       assert.equal(result.domain, 'finance', 'debe devolver el briefing del dominio finance');
       assert.equal(result.body_md, validBriefing.body_md, 'debe devolver el body cacheado');
-      assert.equal(result.model, 'claude-opus-4-5', 'debe mantener el modelo del caché');
+      assert.equal(result.model, 'openai/test-model', 'debe mantener el modelo del caché');
     }),
   );
 
   test(
     'sin caché y sin proveedor degrada a mensaje "no disponible"',
-    withEnv({ ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
+    withEnv({
+      OPENAI_API_KEY: undefined,
+      ANTHROPIC_API_KEY: undefined,
+      GROQ_API_KEY: undefined,
+    }, async () => {
       // No hay briefing en la DB y no hay proveedor → debe degradar
       const result = await generateDailyBriefing();
 
@@ -279,7 +342,7 @@ describe('generateDailyBriefing()', () => {
 
   test(
     'con datos en el store y sin caché construye contexto no vacío',
-    withEnv({ ANTHROPIC_API_KEY: undefined }, async () => {
+    withEnv({ OPENAI_API_KEY: undefined }, async () => {
       // Insertamos datos de mercado en la DB
       await insertMarketSnapshots([
         {
@@ -293,8 +356,6 @@ describe('generateDailyBriefing()', () => {
       ]);
 
       // Sin proveedor LLM degradará, pero el contexto serializado se construye correctamente.
-      // Verificamos serializeContext() con los datos del store de forma indirecta:
-      // generateDailyBriefing() intenta generar y degrada, pero getLatestMarkets() funciona.
       const markets = await (await import('@www/store')).getLatestMarkets();
       assert.equal(markets.length, 1, 'debe haber 1 snapshot en la DB');
       assert.equal(markets[0]?.symbol, 'SPY');
@@ -307,7 +368,11 @@ describe('generateDailyBriefing()', () => {
 
   test(
     'generateDailyBriefing() consulta eventos GDELT del store (D-105)',
-    withEnv({ ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
+    withEnv({
+      OPENAI_API_KEY: undefined,
+      ANTHROPIC_API_KEY: undefined,
+      GROQ_API_KEY: undefined,
+    }, async () => {
       // Insertar un market snapshot y un evento GDELT en la DB
       await insertMarketSnapshots([
         {

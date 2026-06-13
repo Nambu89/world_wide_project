@@ -67,3 +67,11 @@
 - **Decisión:** Toda la UI de `packages/web/` es **responsive y mobile-first**: se diseña primero para viewport estrecho (~375px) y se escala a desktop (~1200px). El mapa MapLibre ocupa el viewport; los paneles se adaptan (drawer/colapsable en móvil, lateral en desktop). Breakpoints en el sistema de estilos central, nunca inline dispersos (coherente con el principio de config central, [feedback_central_layer_config](../memory/feedback_central_layer_config.md)).
 - **Consecuencias:** Más trabajo de layout en el frontend; mayor alcance de uso real. El `qa-tester` valida en 375px y 1200px (su contrato E2E ya lo contempla).
 - **Alternativas:** Desktop-only (rechazado por el usuario); responsive-pero-no-mobile-first (rechazado: en móvil el mapa+panel necesitan el orden de prioridad invertido, mejor diseñarlo desde el viewport estrecho).
+
+## ADR-009: MVP — proveedor IA activo = OpenAI (sustituye la rama activa de ADR-005)
+- **Fecha:** 2026-06-13
+- **Estado:** Aceptado (reemplaza el **proveedor activo** de ADR-005; la arquitectura multi-proveedor del router de ADR-003/005 sigue vigente)
+- **Contexto:** El usuario tiene crédito/API key de **OpenAI**. Los créditos de claude.ai NO sirven para la API programática, y la API de Anthropic Console exige saldo aparte (verificado). Para no bloquear el briefing, se usa OpenAI.
+- **Decisión:** El router (`packages/core/ai`) gana un proveedor **`openai`** (SDK `openai`, var `OPENAI_API_KEY`, modelo configurable `OPENAI_MODEL`). Rama **ACTIVA del MVP = openai** (disponible cuando `OPENAI_API_KEY` presente). `claude`/`groq`/`ollama` quedan como ramas inactivas (key/daemon ausente) — arquitectura multi-proveedor intacta (ADR-003). Cambia la variable de entorno: `ANTHROPIC_API_KEY` → **`OPENAI_API_KEY`**.
+- **Consecuencias:** Briefing real con el crédito OpenAI del usuario. `@anthropic-ai/sdk` se mantiene como rama inactiva (no se borra; el router es multi-proveedor). `zero-key-first` sigue en los conectores; la IA es la excepción de pago (ahora OpenAI en vez de Anthropic).
+- **Alternativas:** Anthropic Console prepago (rechazado: el usuario prefiere su crédito OpenAI); pool programático de la suscripción (no aplica a llamadas Messages con API key).

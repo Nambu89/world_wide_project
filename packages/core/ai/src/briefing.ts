@@ -119,11 +119,19 @@ export async function generateDailyBriefing(): Promise<Briefing> {
   let modelUsed: string;
 
   try {
-    if (pickProvider() === null) {
+    const activeProvider = pickProvider();
+    if (activeProvider === null) {
       throw new Error('no provider available');
     }
     bodyMd = await complete(prompt, { temperature: 0.3, maxTokens: 1024 });
-    modelUsed = 'claude-opus-4-5'; // debe coincidir con lo que usa complete()
+    // Registra el modelo real usado según el proveedor activo (ADR-009).
+    if (activeProvider === 'openai') {
+      modelUsed = `openai/${process.env['OPENAI_MODEL']}`;
+    } else if (activeProvider === 'claude') {
+      modelUsed = 'claude-opus-4-5';
+    } else {
+      modelUsed = activeProvider;
+    }
   } catch {
     // R-2: intenta servir caché expirada como último recurso
     const staleCached = await getStaleCache(DOMAIN);

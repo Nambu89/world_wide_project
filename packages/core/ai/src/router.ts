@@ -1,17 +1,23 @@
 // packages/core/ai/src/router.ts
-// LLM Router — local-first PROVIDER_CHAIN: ollama -> groq -> claude
+// LLM Router — local-first PROVIDER_CHAIN: ollama -> openai -> groq -> claude
 //
 // Metodología re-implementada desde la skill llm-router (no copiada de AGPL).
-// ADR-005/D-004: cadena fija ['ollama','groq','claude'] con health-gating y
-// fall-through por key ausente. Rama ACTIVA = claude (ANTHROPIC_API_KEY).
+// ADR-009: openai sustituye a claude como rama ACTIVA del router MVP.
 //
-// Ollama y Groq quedan available:false en el MVP (sin keys configuradas).
+// Orden de la cadena y disponibilidad en MVP:
+//   - ollama:  unavailable (daemon local no configurado en este entorno)
+//   - openai:  ACTIVO — available iff OPENAI_API_KEY presente
+//   - groq:    available iff GROQ_API_KEY presente (inactivo en MVP sin key)
+//   - claude:  available iff ANTHROPIC_API_KEY presente (rama inactiva; queda como fallback)
+//
+// Modelo OpenAI OBLIGATORIO via OPENAI_MODEL — sin default; ningún modelo se asume (ADR-009).
 
 import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export const PROVIDER_CHAIN = ['ollama', 'groq', 'claude'] as const;
+export const PROVIDER_CHAIN = ['ollama', 'openai', 'groq', 'claude'] as const;
 export type Provider = (typeof PROVIDER_CHAIN)[number];
 
 /** Estado de disponibilidad de un proveedor en el momento de resolución */
@@ -33,10 +39,10 @@ export interface CompleteOptions {
 /**
  * Evalúa cada proveedor de la cadena y devuelve su estado.
  * Criterios gradeables (no vibes):
- *   - ollama: requeriría ping al daemon local; marcado unavailable en MVP
- *     porque no hay infraestructura local en el scope T-05.
- *   - groq: disponible si GROQ_API_KEY presente.
- *   - claude: disponible si ANTHROPIC_API_KEY presente.
+ *   - ollama:  requeriría ping al daemon local; marcado unavailable en MVP.
+ *   - openai:  available iff OPENAI_API_KEY presente (ADR-009, rama activa del MVP).
+ *   - groq:    available iff GROQ_API_KEY presente.
+ *   - claude:  available iff ANTHROPIC_API_KEY presente (rama inactiva en MVP).
  */
 export function resolveChain(): ProviderState[] {
   return [
@@ -45,14 +51,15 @@ export function resolveChain(): ProviderState[] {
       available: false,
       reason: 'ollama daemon not configured in this environment (MVP scope)',
     },
-    {
-      provider: 'groq',
-      available: false,
-      reason: 'GROQ_API_KEY not set — groq unavailable in MVP',
-    },
-    ...(process.env['ANTHROPIC_API_KEY']
-      ? [{ provider: 'claude' as const, available: true }]
-      : [{ provider: 'claude' as const, available: false, reason: 'ANTHROPIC_API_KEY not set' }]),
+    process.env['OPENAI_API_KEY']
+      ? { provider: 'openai' as const, available: true }
+      : { provider: 'openai' as const, available: false, reason: 'OPENAI_API_KEY not set' },
+    process.env['GROQ_API_KEY']
+      ? { provider: 'groq' as const, available: true }
+      : { provider: 'groq' as const, available: false, reason: 'GROQ_API_KEY not set' },
+    process.env['ANTHROPIC_API_KEY']
+      ? { provider: 'claude' as const, available: true }
+      : { provider: 'claude' as const, available: false, reason: 'ANTHROPIC_API_KEY not set' },
   ];
 }
 
@@ -81,9 +88,11 @@ function stripThinking(text: string): string {
  * Llama al primer proveedor disponible con el prompt dado.
  * Si ningún proveedor está disponible, lanza un error manejado en el caller.
  *
- * Actualmente sólo implementa la rama 'claude' (rama ACTIVA del MVP).
- * Las ramas ollama/groq son stubs que lanzan descriptivo; cuando se activen
- * se rellenarán sin cambiar la interfaz pública.
+ * Ramas implementadas:
+ *   - openai: ACTIVA en MVP (OPENAI_API_KEY). Modelo OBLIGATORIO via OPENAI_MODEL
+ *             (sin default; el router falla claro si falta).
+ *   - claude: INACTIVA en MVP (sin ANTHROPIC_API_KEY); queda como fallback futuro.
+ *   - groq/ollama: stubs descriptivos hasta que se activen con sus keys/daemon.
  */
 export async function complete(prompt: string, opts?: CompleteOptions): Promise<string> {
   const provider = pickProvider();
@@ -96,6 +105,30 @@ export async function complete(prompt: string, opts?: CompleteOptions): Promise<
   const maxTokens = opts?.maxTokens ?? 1024;
 
   switch (provider) {
+    case 'openai': {
+      const apiKey = process.env['OPENAI_API_KEY'];
+      if (!apiKey) {
+        throw new Error('LLM_UNAVAILABLE: OPENAI_API_KEY missing at call time');
+      }
+      const model = process.env['OPENAI_MODEL'];
+      if (!model) {
+        throw new Error('LLM_UNAVAILABLE: OPENAI_MODEL missing — define el modelo OpenAI en .env (sin default; ningún modelo se asume)');
+      }
+      const client = new OpenAI({ apiKey });
+      const response = await client.chat.completions.create({
+        model,
+        max_tokens: maxTokens,
+        temperature,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      const choice = response.choices[0];
+      const text = choice?.message?.content;
+      if (!text) {
+        throw new Error('LLM_ERROR: unexpected response structure from openai');
+      }
+      return stripThinking(text);
+    }
+
     case 'claude': {
       const apiKey = process.env['ANTHROPIC_API_KEY'];
       if (!apiKey) {
@@ -108,7 +141,6 @@ export async function complete(prompt: string, opts?: CompleteOptions): Promise<
         temperature,
         messages: [{ role: 'user', content: prompt }],
       });
-      // Extraemos texto del primer bloque de contenido
       const block = message.content[0];
       if (!block || block.type !== 'text') {
         throw new Error('LLM_ERROR: unexpected response structure from claude');
