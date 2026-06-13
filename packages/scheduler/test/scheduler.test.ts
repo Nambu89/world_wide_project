@@ -273,6 +273,81 @@ describe('createScheduler', () => {
       `fast (${fastCount}) should fire more often than slow (${slowCount})`,
     );
   });
+
+  it('boot order: daily job first-run fires AFTER all non-daily jobs complete', async () => {
+    // Record the wall-clock order in which each job COMPLETES its first run.
+    const completionOrder: string[] = [];
+
+    // Non-daily jobs resolve immediately; daily resolves after a tiny delay
+    // (just to make the ordering assertion meaningful even if JS is fast).
+    const fastJob: Job = {
+      name: 'boot-fast',
+      tier: 'fast',
+      // Long interval so the interval callback never fires during the test.
+      intervalMs: 60_000,
+      async run() {
+        completionOrder.push('fast');
+      },
+    };
+
+    const mediumJob: Job = {
+      name: 'boot-medium',
+      tier: 'medium',
+      intervalMs: 60_000,
+      async run() {
+        completionOrder.push('medium');
+      },
+    };
+
+    const slowJob: Job = {
+      name: 'boot-slow',
+      tier: 'slow',
+      intervalMs: 60_000,
+      async run() {
+        completionOrder.push('slow');
+      },
+    };
+
+    const dailyJob: Job = {
+      name: 'boot-daily',
+      tier: 'daily',
+      intervalMs: 60_000,
+      async run() {
+        completionOrder.push('daily');
+      },
+    };
+
+    // Intentionally pass daily FIRST in the array to prove the scheduler
+    // re-orders by tier, not by array position.
+    const scheduler = createScheduler([dailyJob, fastJob, mediumJob, slowJob]);
+    scheduler.start();
+
+    // Give enough time for the async boot sequence to complete.
+    await sleep(100);
+    scheduler.stop();
+
+    // All 4 jobs must have run exactly once during boot.
+    assert.equal(completionOrder.length, 4, `Expected 4 boot runs, got ${completionOrder.length}: ${completionOrder.join(',')}`);
+
+    // daily must be the LAST entry.
+    assert.equal(
+      completionOrder[completionOrder.length - 1],
+      'daily',
+      `daily must run last during boot; order was: ${completionOrder.join(' → ')}`,
+    );
+
+    // All non-daily jobs must appear BEFORE daily.
+    const dailyIndex = completionOrder.indexOf('daily');
+    const nonDailyNames = ['fast', 'medium', 'slow'];
+    for (const name of nonDailyNames) {
+      const idx = completionOrder.indexOf(name);
+      assert.ok(idx !== -1, `${name} job did not run during boot`);
+      assert.ok(
+        idx < dailyIndex,
+        `${name} (index ${idx}) must complete before daily (index ${dailyIndex}); order: ${completionOrder.join(' → ')}`,
+      );
+    }
+  });
 });
 
 // ─── Test suite: defaultJobs ──────────────────────────────────────────────────

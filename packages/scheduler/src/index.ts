@@ -49,10 +49,18 @@ interface SchedulerHandle {
 
 /**
  * Creates a scheduler that runs each job on its own interval.
- * - start() begins all jobs (first run happens immediately, then repeats on intervalMs).
+ *
+ * Boot sequencing (cold-start fix):
+ *   1. All non-daily jobs run their first execution in parallel and are AWAITED.
+ *   2. Only after ALL non-daily first runs complete (success or fail) does the
+ *      daily job run its first execution.
+ *   3. setInterval for EVERY job is registered right away so interval timing
+ *      begins from boot — the sequencing only affects the immediate first run.
+ *
+ * - start() is idempotent — calling twice is a no-op.
  * - stop()  clears all intervals; no more executions fire after stop().
- * - A job that throws does NOT crash the scheduler — error is logged and the next
- *   interval fires as normal.
+ * - A job that throws does NOT crash the scheduler — error is logged and the
+ *   next interval fires as normal.
  */
 export function createScheduler(jobs: Job[]): SchedulerHandle {
   const handles: ReturnType<typeof setInterval>[] = [];
@@ -63,12 +71,23 @@ export function createScheduler(jobs: Job[]): SchedulerHandle {
       if (running) return;
       running = true;
 
+      const nonDailyJobs = jobs.filter((j) => j.tier !== 'daily');
+      const dailyJobs    = jobs.filter((j) => j.tier === 'daily');
+
+      // Register all intervals immediately so timing starts from boot.
       for (const job of jobs) {
-        // Run once immediately, then on interval
-        void runJob(job);
         const h = setInterval(() => void runJob(job), job.intervalMs);
         handles.push(h);
       }
+
+      // Boot sequencing: non-daily → await → daily (fire-and-forget outer async).
+      void (async () => {
+        // Step 1: run all non-daily jobs in parallel; wait for ALL to finish.
+        await Promise.all(nonDailyJobs.map((j) => runJob(j)));
+
+        // Step 2: only now run daily jobs (briefing reads a populated store).
+        await Promise.all(dailyJobs.map((j) => runJob(j)));
+      })();
     },
 
     stop() {
