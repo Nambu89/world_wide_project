@@ -1,6 +1,6 @@
 # ROADMAP — world_wide_project
 
-Progreso global: `██████░░░░ 62% (10/16)` — **Fase 1 (MVP Finanzas) CERRADA**: /verify VERIFIED + QA E2E Playwright PASS + OpenAI gpt-5.4 live + cold-start fix. 10 commits en `main`. Siguiente: **Fase 2** (RPI Research+Design en curso).
+Progreso global: `███████░░░ 69% (11/16)` — **Fase 1 (MVP Finanzas) CERRADA** + **Fase 2 rebanada 1 (Capa de eventos globales) CERRADA**: /verify VERIFIED + smoke en vivo + browser E2E PASS (30 eventos render, 0 errores consola/red). USGS+GDELT-raw-CSV+EONET → tabla `events` + /api/events + capas por tipo. Siguiente: completar dominios (Finanzas/Educación) + rebanada CII (consume `events`).
 
 > Prioridad: **Alta** = MVP, **Media** = dominios completos, **Baja** = pulido. Marca `[x]` al completar (con `verifier` = VERIFIED).
 
@@ -22,7 +22,7 @@ Progreso global: `██████░░░░ 62% (10/16)` — **Fase 1 (MVP 
 - [x] **Alta** — `server.ts` cableado connectors + scheduler + api ✅ pipeline seguridad + 5 endpoints, 9 tests
 
 ## Fase 2 — Dominios + scoring
-- [ ] **Alta** — **Capa de eventos globales multi-fuente** (ADR-010, 1ª rebanada) — design-doc ✅ `docs/design/2026-06-13-global-events.md`. MVP keyless: USGS terremotos + NASA EONET (naturales) + GDELT raw Events CSV (conflicto, coords reales). Tabla `events` unificada + capas mapa por tipo. Diferidas: ReliefWeb/UCDP/ACLED (key/gated). Pendiente: plan → /check-plan → implementar.
+- [x] **Alta** — **Capa de eventos globales multi-fuente** (ADR-010, 1ª rebanada) ✅ **CERRADA** — plan `plans/2026-06-14-global-events.md` → /check-plan PASS → 8 tareas/5 waves → /verify VERIFIED + smoke en vivo + browser E2E PASS. USGS terremotos (live 245) + NASA EONET (live 0 transitorio) + GDELT raw Events CSV (live 650, coords reales del suceso). Tabla `events` unificada (migración 002, dropó gdelt_events) + severity 0..100 + /api/events + capas mapa por tipo + briefing enriquecido. Follow-ups: EONET re-check, ruido GDELT QuadClass1/2 (minSeverity). Diferidas: ReliefWeb/UCDP/ACLED (key/gated). BUG cazado por qa-tester (contrato camelCase client.ts) → fixeado + verificado en navegador.
 - [ ] **Media** — Completar Finanzas (FRED/EIA/sanctions), Educación (rss-proxy + clustering ONNX), Política (ACLED/UCDP/country-risk)
 - [ ] **Media** — `packages/core/cii/` CII re-implementado + histórico/tendencias *(design-doc ✅ `docs/design/2026-06-13-cii-scoring.md`; PHASE-SPLIT: solo componente Information activo hoy, resto se desbloquea con conectores keyed; pendiente ratificar OQs → plan → /check-plan)*
 

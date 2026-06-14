@@ -407,6 +407,252 @@ html, body, #root {
 }
 
 /* ============================================================
+   Panel tab switcher
+   ============================================================ */
+.panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.panel-tab {
+  flex: 1;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  min-height: var(--touch-target-min);
+  transition: color 0.15s, border-bottom-color 0.15s;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.panel-tab.active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+
+.panel-tab:hover:not(.active) {
+  color: var(--color-text-primary);
+}
+
+/* ============================================================
+   Events Panel — T-13
+   Uses tokens from :root for all color/spacing references.
+   ============================================================ */
+
+.events-panel {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.events-panel__heading {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  margin-bottom: 0;  /* gap handles spacing */
+}
+
+/* ------------------------------------------------------------------
+   Toggle controls — grouped by category
+   ------------------------------------------------------------------ */
+.events-panel__toggles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.events-panel__toggle-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.events-panel__toggle-group-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.events-panel__toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.events-panel__toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  min-height: var(--touch-target-min);
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.events-panel__toggle-btn.active {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.events-panel__toggle-btn:hover:not(.active) {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border-color: var(--color-text-secondary);
+}
+
+.events-panel__toggle-icon {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  opacity: 0.85;
+}
+
+.events-panel__toggle-label {
+  /* Hide label on very narrow viewports to keep buttons compact */
+}
+
+@media (max-width: 374px) {
+  .events-panel__toggle-label {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Event list
+   ------------------------------------------------------------------ */
+.events-panel__list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.events-panel__event-row {
+  padding: var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  transition: border-color 0.15s;
+}
+
+.events-panel__event-row:hover {
+  border-color: var(--color-accent);
+}
+
+.events-panel__event-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.events-panel__severity {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--rounded-sm);
+  color: #fff;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
+}
+
+.events-panel__event-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.events-panel__event-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.events-panel__event-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.events-panel__event-link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.events-panel__event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.events-panel__event-type {
+  text-transform: capitalize;
+  font-weight: var(--font-weight-medium);
+}
+
+.events-panel__meta-sep {
+  color: var(--color-border);
+}
+
+.events-panel__event-source {
+  opacity: 0.75;
+}
+
+/* ------------------------------------------------------------------
+   Attribution footer — always visible (D-107 / feedback_data_tos)
+   ------------------------------------------------------------------ */
+.events-panel__attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: auto;
+}
+
+.events-panel__attr-sep {
+  color: var(--color-border);
+}
+
+.events-panel__attr-link {
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+
+.events-panel__attr-link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+/* ============================================================
    MapLibre overrides (keep attribution visible)
    ============================================================ */
 .maplibregl-ctrl-attrib {

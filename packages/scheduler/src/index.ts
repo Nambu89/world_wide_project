@@ -1,26 +1,33 @@
 // packages/scheduler/src/index.ts
-// @www/scheduler — T-04 implementation
+// @www/scheduler — T-11 implementation (Wave C, Fase 2 global-events)
 //
 // ADR-004/D-003: scheduler server-side; fetch connector → persist in store BEFORE serving.
-// D-103: 4 tiers by volatility. Intervals are CONFIGURABLE (passed via cfg / Job.intervalMs),
+// D-105: 4 tiers by volatility. Intervals are CONFIGURABLE (passed via cfg / Job.intervalMs),
 //         never hardcoded inside run().
+// T-11 changes vs T-04:
+//   - SchedulerDeps: adds fetchUsgs/fetchEonet/fetchGdelt (EventRow), upsertEvents;
+//     removes insertGdeltEvents (gdelt_events table dropped in T-08 migration 002).
+//   - defaultJobs: replaces gdelt-financial job (insertGdeltEvents) with gdelt-events job
+//     (upsertEvents); adds usgs (fast) + eonet (medium) jobs.
+//   - Return order: [markets, usgs, eonet, gdelt, news, daily].
 
 import {
   insertMarketSnapshots,
-  insertGdeltEvents,
   insertNewsItems,
+  upsertEvents,
   purgeAndDownsample,
   type MarketSnapshot,
-  type GdeltEvent,
   type NewsItem,
+  type EventRow,
 } from '@www/store';
 
 import { generateDailyBriefing } from '@www/core-ai';
 import type { Briefing } from '@www/store';
 
-// ─── ConnectorResult contract (T-03a/b/c types) ──────────────────────────────
-// The connectors package is still a stub; we define the structural contract
-// here so the scheduler compiles and the real connectors can satisfy it.
+// ─── ConnectorResult contract ─────────────────────────────────────────────────
+// Mirrors the structural type exported by @www/connectors (finance/markets.ts).
+// Defined here so the scheduler compiles independently if the connectors package
+// is temporarily unavailable (e.g. clean build ordering).
 
 export interface ConnectorResult<T> {
   data: T[];
@@ -118,8 +125,8 @@ async function runJob(job: Job): Promise<void> {
 // ─── Default intervals (ms) — override via cfg ────────────────────────────────
 
 const DEFAULT_INTERVALS: Record<Tier, number> = {
-  fast:   5  * 60 * 1000,       // 5 min  — markets
-  medium: 15 * 60 * 1000,       // 15 min — gdelt
+  fast:   5  * 60 * 1000,       // 5 min  — markets + usgs (earthquake)
+  medium: 15 * 60 * 1000,       // 15 min — eonet + gdelt (events)
   slow:   30 * 60 * 1000,       // 30 min — news
   daily:  24 * 60 * 60 * 1000,  // 24 h   — briefing + maintenance
 };
@@ -129,41 +136,49 @@ const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 // ─── Connector + store + ai dependencies (injected so tests can mock them) ────
 
+/**
+ * T-11: SchedulerDeps now carries the three geo-event connectors (all returning
+ * ConnectorResult<EventRow>) and upsertEvents from @www/store.
+ * insertGdeltEvents is removed — gdelt_events table was DROPped in migration 002.
+ */
 export interface SchedulerDeps {
-  // Connector fetchers (T-03a/b/c)
+  // Connector fetchers
   fetchMarkets: () => Promise<ConnectorResult<MarketSnapshot>>;
-  fetchGdelt: () => Promise<ConnectorResult<GdeltEvent>>;
-  fetchNews: () => Promise<ConnectorResult<NewsItem>>;
+  fetchUsgs:    () => Promise<ConnectorResult<EventRow>>;
+  fetchEonet:   () => Promise<ConnectorResult<EventRow>>;
+  fetchGdelt:   () => Promise<ConnectorResult<EventRow>>;
+  fetchNews:    () => Promise<ConnectorResult<NewsItem>>;
 
   // Store writes (@www/store) — defaults to real implementations
   insertMarketSnapshots: (rows: MarketSnapshot[]) => Promise<void>;
-  insertGdeltEvents: (rows: GdeltEvent[]) => Promise<void>;
-  insertNewsItems: (rows: NewsItem[]) => Promise<void>;
-  purgeAndDownsample: (beforeMs: number) => Promise<void>;
+  upsertEvents:          (rows: EventRow[])        => Promise<void>;
+  insertNewsItems:       (rows: NewsItem[])         => Promise<void>;
+  purgeAndDownsample:    (beforeMs: number)         => Promise<void>;
 
   // AI pipeline (@www/core-ai) — defaults to real implementation
   generateDailyBriefing: () => Promise<Briefing>;
 }
 
-// Keep the old ConnectorDeps name as a type alias for backwards compat
+// ConnectorDeps type alias (backwards compat — server.ts uses SchedulerDeps directly)
 export type ConnectorDeps = Pick<
   SchedulerDeps,
-  'fetchMarkets' | 'fetchGdelt' | 'fetchNews'
+  'fetchMarkets' | 'fetchUsgs' | 'fetchEonet' | 'fetchGdelt' | 'fetchNews'
 >;
 
 /**
  * Real (production) implementations of store + ai deps.
+ * insertGdeltEvents intentionally omitted — no longer in SchedulerDeps (T-11).
  */
 const REAL_STORE_AI_DEPS: Pick<
   SchedulerDeps,
   | 'insertMarketSnapshots'
-  | 'insertGdeltEvents'
+  | 'upsertEvents'
   | 'insertNewsItems'
   | 'purgeAndDownsample'
   | 'generateDailyBriefing'
 > = {
   insertMarketSnapshots,
-  insertGdeltEvents,
+  upsertEvents,
   insertNewsItems,
   purgeAndDownsample,
   generateDailyBriefing,
@@ -172,22 +187,29 @@ const REAL_STORE_AI_DEPS: Pick<
 /**
  * Default connector implementations — dynamic imports so the scheduler compiles
  * even while @www/connectors is a stub. The real exports will be present at
- * runtime once T-03a/b/c land.
+ * runtime once the connectors land.
  */
 async function loadDefaultConnectors(): Promise<ConnectorDeps> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod = await import('@www/connectors') as any;
   return {
     fetchMarkets: mod.fetchMarkets as ConnectorDeps['fetchMarkets'],
-    fetchGdelt: mod.fetchGdelt as ConnectorDeps['fetchGdelt'],
-    fetchNews: mod.fetchNews as ConnectorDeps['fetchNews'],
+    fetchUsgs:    mod.fetchUsgs    as ConnectorDeps['fetchUsgs'],
+    fetchEonet:   mod.fetchEonet   as ConnectorDeps['fetchEonet'],
+    fetchGdelt:   mod.fetchGdelt   as ConnectorDeps['fetchGdelt'],
+    fetchNews:    mod.fetchNews    as ConnectorDeps['fetchNews'],
   };
 }
 
 // ─── Default jobs factory ─────────────────────────────────────────────────────
 
 /**
- * Builds the MVP jobs (markets / gdelt / news / daily) with configurable intervals.
+ * Builds the production jobs:
+ *   markets (fast) · usgs (fast) · eonet (medium) · gdelt (medium) · news (slow) · daily
+ *
+ * T-11: gdelt-financial job (insertGdeltEvents → gdelt_events) REPLACED by gdelt-events
+ * job (upsertEvents → events). usgs + eonet jobs ADDED. Order: [markets, usgs, eonet,
+ * gdelt, news, daily]. Mantiene la firma defaultJobs(cfg?, deps?): Job[] que usa server.ts.
  *
  * @param cfg  - override any tier's interval in ms.
  * @param deps - inject mocks for testing (optional; defaults load from @www/connectors + real store/ai).
@@ -227,7 +249,55 @@ export function defaultJobs(
     },
   };
 
-  // ── gdelt job (medium tier) ───────────────────────────────────────────────
+  // ── usgs job (fast tier) — D-105: earthquakes are high-frequency ──────────
+  const usgsJob: Job = {
+    name: 'usgs',
+    tier: 'fast',
+    intervalMs: intervals.fast,
+    async run() {
+      const connectors = deps?.fetchUsgs
+        ? { fetchUsgs: deps.fetchUsgs }
+        : await loadDefaultConnectors();
+      const result = await connectors.fetchUsgs();
+      if (result.data.length > 0) {
+        // ADR-004: persist BEFORE serving (upsertEvents, not append)
+        await storeAi.upsertEvents(result.data);
+        console.log(
+          `[scheduler] usgs: persisted ${result.data.length} events (stale=${result.stale})`,
+        );
+      } else {
+        console.warn('[scheduler] usgs: connector returned empty data — skipping upsert');
+      }
+    },
+  };
+
+  // ── eonet job (medium tier) — D-105: natural disasters less frequent ───────
+  const eonetJob: Job = {
+    name: 'eonet',
+    tier: 'medium',
+    intervalMs: intervals.medium,
+    async run() {
+      const connectors = deps?.fetchEonet
+        ? { fetchEonet: deps.fetchEonet }
+        : await loadDefaultConnectors();
+      const result = await connectors.fetchEonet();
+      if (result.data.length > 0) {
+        // ADR-004: persist BEFORE serving
+        await storeAi.upsertEvents(result.data);
+        console.log(
+          `[scheduler] eonet: persisted ${result.data.length} events (stale=${result.stale})`,
+        );
+      } else {
+        console.warn('[scheduler] eonet: connector returned empty data — skipping upsert');
+      }
+    },
+  };
+
+  // ── gdelt job (medium tier) — replaces the old gdelt-financial job ─────────
+  // T-11: the old job called insertGdeltEvents(GdeltEvent[]) into gdelt_events.
+  // That table was DROPped in migration 002 (T-08). This job now calls
+  // upsertEvents(EventRow[]) into the unified `events` table. The connector
+  // fetchGdelt now returns ConnectorResult<EventRow> (refactored in T-10c).
   const gdeltJob: Job = {
     name: 'gdelt',
     tier: 'medium',
@@ -238,12 +308,13 @@ export function defaultJobs(
         : await loadDefaultConnectors();
       const result = await connectors.fetchGdelt();
       if (result.data.length > 0) {
-        await storeAi.insertGdeltEvents(result.data);
+        // ADR-004: persist BEFORE serving
+        await storeAi.upsertEvents(result.data);
         console.log(
           `[scheduler] gdelt: persisted ${result.data.length} events (stale=${result.stale})`,
         );
       } else {
-        console.warn('[scheduler] gdelt: connector returned empty data — skipping insert');
+        console.warn('[scheduler] gdelt: connector returned empty data — skipping upsert');
       }
     },
   };
@@ -270,6 +341,9 @@ export function defaultJobs(
   };
 
   // ── daily job (daily tier) ────────────────────────────────────────────────
+  // Boot sequencing (cold-start fix, Fase 1): daily runs AFTER all non-daily
+  // jobs complete their first run so the store is populated before the briefing.
+  // purgeAndDownsample in T-08 already purges `events` (not gdelt_events).
   const dailyJob: Job = {
     name: 'daily',
     tier: 'daily',
@@ -283,6 +357,7 @@ export function defaultJobs(
       );
 
       // 2. Purge + downsample data older than retention window
+      // purgeAndDownsample after T-08 purges events + market_snapshots + news_items
       const beforeMs = Date.now() - RETENTION_MS;
       await storeAi.purgeAndDownsample(beforeMs);
       console.log(
@@ -291,5 +366,6 @@ export function defaultJobs(
     },
   };
 
-  return [marketsJob, gdeltJob, newsJob, dailyJob];
+  // T-11 order: markets · usgs · eonet · gdelt · news · daily
+  return [marketsJob, usgsJob, eonetJob, gdeltJob, newsJob, dailyJob];
 }

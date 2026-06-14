@@ -1,6 +1,9 @@
 // packages/scheduler/test/scheduler.test.ts
 // node:test — no real network, no real DB, no real LLM.
 //
+// T-11: tests updated to cover usgs(fast)/eonet(medium)/gdelt(medium) jobs
+// that persist via upsertEvents; verify insertGdeltEvents is GONE from all paths.
+//
 // Run via:
 //   node --import tsx --test packages/scheduler/test/scheduler.test.ts
 
@@ -15,7 +18,7 @@ import {
   type ConnectorResult,
 } from '../src/index.js';
 
-import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing } from '@www/store';
+import type { MarketSnapshot, NewsItem, Briefing, EventRow } from '@www/store';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,38 +26,65 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ─── Fixture EventRow factory ──────────────────────────────────────────────────
+
+function makeEventRow(overrides: Partial<EventRow> = {}): EventRow {
+  return {
+    source:        overrides.source        ?? 'usgs',
+    sourceEventId: overrides.sourceEventId ?? 'EV-001',
+    eventType:     overrides.eventType     ?? 'earthquake',
+    category:      overrides.category      ?? 'natural',
+    severity:      overrides.severity      ?? 55,
+    lat:           overrides.lat           ?? 37.5,
+    lon:           overrides.lon           ?? -122.1,
+    country:       overrides.country       ?? 'us',
+    title:         overrides.title         ?? '5.0 km S of test city',
+    url:           overrides.url           ?? 'https://earthquake.usgs.gov/test',
+    occurredAt:    overrides.occurredAt    ?? Date.now() - 3_600_000,
+    capturedAt:    overrides.capturedAt    ?? Date.now(),
+    rawJson:       overrides.rawJson       ?? '{}',
+  };
+}
+
 // ─── Mock factory ─────────────────────────────────────────────────────────────
 
 interface MockOptions {
   emptyMarkets?: boolean;
   throwOnMarkets?: boolean;
+  emptyUsgs?: boolean;
+  emptyEonet?: boolean;
+  emptyGdelt?: boolean;
 }
 
 interface TrackingDeps extends SchedulerDeps {
   // tracking counters
   fetchMarketsCalled: number;
-  fetchGdeltCalled: number;
-  fetchNewsCalled: number;
-  insertedMarkets: MarketSnapshot[];
-  insertedGdelt: GdeltEvent[];
-  insertedNews: NewsItem[];
-  briefingCalled: number;
-  purgeCalled: number;
-  purgeCalledWithMs: number[];
+  fetchUsgsCalled:    number;
+  fetchEonetCalled:   number;
+  fetchGdeltCalled:   number;
+  fetchNewsCalled:    number;
+  insertedMarkets:    MarketSnapshot[];
+  upsertedEvents:     EventRow[];
+  insertedNews:       NewsItem[];
+  briefingCalled:     number;
+  purgeCalled:        number;
+  purgeCalledWithMs:  number[];
 }
 
 function makeDeps(opts: MockOptions = {}): TrackingDeps {
   const tracking: TrackingDeps = {
     // ── Tracking state ────────────────────────────────────────────────────
     fetchMarketsCalled: 0,
-    fetchGdeltCalled: 0,
-    fetchNewsCalled: 0,
-    insertedMarkets: [],
-    insertedGdelt: [],
-    insertedNews: [],
-    briefingCalled: 0,
-    purgeCalled: 0,
-    purgeCalledWithMs: [],
+    fetchUsgsCalled:    0,
+    fetchEonetCalled:   0,
+    fetchGdeltCalled:   0,
+    fetchNewsCalled:    0,
+    insertedMarkets:    [],
+    upsertedEvents:     [],
+    insertedNews:       [],
+    briefingCalled:     0,
+    purgeCalled:        0,
+    purgeCalledWithMs:  [],
 
     // ── Connector mocks ───────────────────────────────────────────────────
     async fetchMarkets(): Promise<ConnectorResult<MarketSnapshot>> {
@@ -66,34 +96,45 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
       return {
         data: [
           {
-            source: 'mock',
-            symbol: 'BTC',
+            source:      'mock',
+            symbol:      'BTC',
             asset_class: 'crypto',
-            price: 60_000,
-            change_pct: 1.5,
+            price:       60_000,
+            change_pct:  1.5,
             captured_at: Date.now(),
           },
         ],
-        stale: false,
+        stale:     false,
         fetchedAt: Date.now(),
       };
     },
 
-    async fetchGdelt(): Promise<ConnectorResult<GdeltEvent>> {
-      tracking.fetchGdeltCalled++;
+    async fetchUsgs(): Promise<ConnectorResult<EventRow>> {
+      tracking.fetchUsgsCalled++;
+      if (opts.emptyUsgs) return { data: [], stale: false, fetchedAt: Date.now() };
       return {
-        data: [
-          {
-            source: 'gdelt',
-            event_id: 'EV001',
-            category: 'conflict',
-            severity: 0.7,
-            lat: 40.4,
-            lon: -3.7,
-            captured_at: Date.now(),
-          },
-        ],
-        stale: false,
+        data:      [makeEventRow({ source: 'usgs', sourceEventId: 'usgs-001', eventType: 'earthquake' })],
+        stale:     false,
+        fetchedAt: Date.now(),
+      };
+    },
+
+    async fetchEonet(): Promise<ConnectorResult<EventRow>> {
+      tracking.fetchEonetCalled++;
+      if (opts.emptyEonet) return { data: [], stale: false, fetchedAt: Date.now() };
+      return {
+        data:      [makeEventRow({ source: 'eonet', sourceEventId: 'EONET_20442', eventType: 'wildfire' })],
+        stale:     false,
+        fetchedAt: Date.now(),
+      };
+    },
+
+    async fetchGdelt(): Promise<ConnectorResult<EventRow>> {
+      tracking.fetchGdeltCalled++;
+      if (opts.emptyGdelt) return { data: [], stale: false, fetchedAt: Date.now() };
+      return {
+        data:      [makeEventRow({ source: 'gdelt', sourceEventId: 'gdelt-900000001', eventType: 'conflict', category: 'conflict' })],
+        stale:     false,
         fetchedAt: Date.now(),
       };
     },
@@ -103,15 +144,15 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
       return {
         data: [
           {
-            source: 'rss',
-            feed_domain: 'example.com',
-            title: 'Test headline',
-            url: 'https://example.com/news/1',
+            source:       'rss',
+            feed_domain:  'example.com',
+            title:        'Test headline',
+            url:          'https://example.com/news/1',
             published_at: Date.now() - 3_600_000,
-            captured_at: Date.now(),
+            captured_at:  Date.now(),
           },
         ],
-        stale: false,
+        stale:     false,
         fetchedAt: Date.now(),
       };
     },
@@ -121,8 +162,8 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
       tracking.insertedMarkets.push(...rows);
     },
 
-    async insertGdeltEvents(rows: GdeltEvent[]): Promise<void> {
-      tracking.insertedGdelt.push(...rows);
+    async upsertEvents(rows: EventRow[]): Promise<void> {
+      tracking.upsertedEvents.push(...rows);
     },
 
     async insertNewsItems(rows: NewsItem[]): Promise<void> {
@@ -139,10 +180,10 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
       tracking.briefingCalled++;
       const now = Date.now();
       return {
-        domain: 'finance',
-        body_md: 'Mock briefing body.',
-        model: 'mock-model',
-        created_at: now,
+        domain:      'finance',
+        body_md:     'Mock briefing body.',
+        model:       'mock-model',
+        created_at:  now,
         valid_until: now + 86_400_000,
       };
     },
@@ -158,8 +199,8 @@ describe('createScheduler', () => {
     let callCount = 0;
 
     const job: Job = {
-      name: 'test-job',
-      tier: 'fast',
+      name:      'test-job',
+      tier:      'fast',
       intervalMs: 15,
       async run() { callCount++; },
     };
@@ -170,15 +211,15 @@ describe('createScheduler', () => {
     scheduler.stop();
 
     // immediate + at least 2 intervals within 55ms at 15ms each
-    assert.ok(callCount >= 2, `Expected ≥ 2 calls, got ${callCount}`);
+    assert.ok(callCount >= 2, `Expected >= 2 calls, got ${callCount}`);
   });
 
   it('stop() prevents further executions', async () => {
     let callCount = 0;
 
     const job: Job = {
-      name: 'stop-test',
-      tier: 'slow',
+      name:      'stop-test',
+      tier:      'slow',
       intervalMs: 20,
       async run() { callCount++; },
     };
@@ -195,11 +236,11 @@ describe('createScheduler', () => {
 
   it('a failing job does not crash the scheduler or other jobs', async () => {
     let goodCount = 0;
-    let badCount = 0;
+    let badCount  = 0;
 
     const badJob: Job = {
-      name: 'bad-job',
-      tier: 'fast',
+      name:      'bad-job',
+      tier:      'fast',
       intervalMs: 15,
       async run() {
         badCount++;
@@ -208,8 +249,8 @@ describe('createScheduler', () => {
     };
 
     const goodJob: Job = {
-      name: 'good-job',
-      tier: 'fast',
+      name:      'good-job',
+      tier:      'fast',
       intervalMs: 15,
       async run() { goodCount++; },
     };
@@ -219,7 +260,7 @@ describe('createScheduler', () => {
     await sleep(50);
     scheduler.stop();
 
-    assert.ok(badCount >= 1, `Bad job should still have run (count=${badCount})`);
+    assert.ok(badCount  >= 1, `Bad job should still have run (count=${badCount})`);
     assert.ok(goodCount >= 1, `Good job should have run despite failing neighbor (count=${goodCount})`);
   });
 
@@ -227,8 +268,8 @@ describe('createScheduler', () => {
     let callCount = 0;
 
     const job: Job = {
-      name: 'idempotent-test',
-      tier: 'fast',
+      name:      'idempotent-test',
+      tier:      'fast',
       intervalMs: 20,
       async run() { callCount++; },
     };
@@ -242,7 +283,7 @@ describe('createScheduler', () => {
 
     // single start: immediate + ~2 intervals = ~3 calls in 55ms
     // double start (broken): would double those, so ~6
-    assert.ok(callCount <= 4, `Expected ≤ 4 with idempotent start, got ${callCount}`);
+    assert.ok(callCount <= 4, `Expected <= 4 with idempotent start, got ${callCount}`);
   });
 
   it('intervals are read from Job.intervalMs — fast fires more often than slow', async () => {
@@ -250,15 +291,15 @@ describe('createScheduler', () => {
     let slowCount = 0;
 
     const fastJob: Job = {
-      name: 'fast-cfg',
-      tier: 'fast',
+      name:      'fast-cfg',
+      tier:      'fast',
       intervalMs: 12,
       async run() { fastCount++; },
     };
 
     const slowJob: Job = {
-      name: 'slow-cfg',
-      tier: 'slow',
+      name:      'slow-cfg',
+      tier:      'slow',
       intervalMs: 30,
       async run() { slowCount++; },
     };
@@ -275,65 +316,50 @@ describe('createScheduler', () => {
   });
 
   it('boot order: daily job first-run fires AFTER all non-daily jobs complete', async () => {
-    // Record the wall-clock order in which each job COMPLETES its first run.
     const completionOrder: string[] = [];
 
-    // Non-daily jobs resolve immediately; daily resolves after a tiny delay
-    // (just to make the ordering assertion meaningful even if JS is fast).
     const fastJob: Job = {
-      name: 'boot-fast',
-      tier: 'fast',
-      // Long interval so the interval callback never fires during the test.
+      name:      'boot-fast',
+      tier:      'fast',
       intervalMs: 60_000,
-      async run() {
-        completionOrder.push('fast');
-      },
+      async run() { completionOrder.push('fast'); },
     };
 
     const mediumJob: Job = {
-      name: 'boot-medium',
-      tier: 'medium',
+      name:      'boot-medium',
+      tier:      'medium',
       intervalMs: 60_000,
-      async run() {
-        completionOrder.push('medium');
-      },
+      async run() { completionOrder.push('medium'); },
     };
 
     const slowJob: Job = {
-      name: 'boot-slow',
-      tier: 'slow',
+      name:      'boot-slow',
+      tier:      'slow',
       intervalMs: 60_000,
-      async run() {
-        completionOrder.push('slow');
-      },
+      async run() { completionOrder.push('slow'); },
     };
 
     const dailyJob: Job = {
-      name: 'boot-daily',
-      tier: 'daily',
+      name:      'boot-daily',
+      tier:      'daily',
       intervalMs: 60_000,
-      async run() {
-        completionOrder.push('daily');
-      },
+      async run() { completionOrder.push('daily'); },
     };
 
-    // Intentionally pass daily FIRST in the array to prove the scheduler
-    // re-orders by tier, not by array position.
+    // Intentionally pass daily FIRST to prove scheduler re-orders by tier, not position.
     const scheduler = createScheduler([dailyJob, fastJob, mediumJob, slowJob]);
     scheduler.start();
 
-    // Give enough time for the async boot sequence to complete.
     await sleep(100);
     scheduler.stop();
 
-    // All 4 jobs must have run exactly once during boot.
     assert.equal(completionOrder.length, 4, `Expected 4 boot runs, got ${completionOrder.length}: ${completionOrder.join(',')}`);
 
     // daily must be the LAST entry.
     assert.equal(
       completionOrder[completionOrder.length - 1],
       'daily',
-      `daily must run last during boot; order was: ${completionOrder.join(' → ')}`,
+      `daily must run last during boot; order was: ${completionOrder.join(' -> ')}`,
     );
 
     // All non-daily jobs must appear BEFORE daily.
@@ -344,7 +370,7 @@ describe('createScheduler', () => {
       assert.ok(idx !== -1, `${name} job did not run during boot`);
       assert.ok(
         idx < dailyIndex,
-        `${name} (index ${idx}) must complete before daily (index ${dailyIndex}); order: ${completionOrder.join(' → ')}`,
+        `${name} (index ${idx}) must complete before daily (index ${dailyIndex}); order: ${completionOrder.join(' -> ')}`,
       );
     }
   });
@@ -353,16 +379,42 @@ describe('createScheduler', () => {
 // ─── Test suite: defaultJobs ──────────────────────────────────────────────────
 
 describe('defaultJobs', () => {
-  it('returns exactly 4 jobs covering all tiers', () => {
+  // T-11: now 6 jobs (markets/usgs/eonet/gdelt/news/daily)
+  it('returns exactly 6 jobs: markets/usgs/eonet/gdelt/news/daily', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
-    assert.equal(jobs.length, 4);
+    assert.equal(jobs.length, 6, `Expected 6 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
 
-    const tiers = new Set(jobs.map((j) => j.tier));
-    assert.ok(tiers.has('fast'),   'should have fast tier');
-    assert.ok(tiers.has('medium'), 'should have medium tier');
-    assert.ok(tiers.has('slow'),   'should have slow tier');
-    assert.ok(tiers.has('daily'),  'should have daily tier');
+    const names = jobs.map((j) => j.name);
+    assert.ok(names.includes('markets'), 'should include markets job');
+    assert.ok(names.includes('usgs'),    'should include usgs job');
+    assert.ok(names.includes('eonet'),   'should include eonet job');
+    assert.ok(names.includes('gdelt'),   'should include gdelt job');
+    assert.ok(names.includes('news'),    'should include news job');
+    assert.ok(names.includes('daily'),   'should include daily job');
+  });
+
+  // T-11: verify tier assignments per D-105
+  it('usgs=fast, eonet=medium, gdelt=medium per D-105', () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+
+    const byName = Object.fromEntries(jobs.map((j) => [j.name, j]));
+
+    assert.equal(byName['usgs']?.tier,    'fast',   'usgs must be fast tier (D-105)');
+    assert.equal(byName['eonet']?.tier,   'medium', 'eonet must be medium tier (D-105)');
+    assert.equal(byName['gdelt']?.tier,   'medium', 'gdelt must be medium tier (D-105)');
+    assert.equal(byName['markets']?.tier, 'fast',   'markets must be fast tier');
+    assert.equal(byName['news']?.tier,    'slow',   'news must be slow tier');
+    assert.equal(byName['daily']?.tier,   'daily',  'daily must be daily tier');
+  });
+
+  // T-11: return order must be [markets, usgs, eonet, gdelt, news, daily]
+  it('job order is [markets, usgs, eonet, gdelt, news, daily]', () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+    const order = jobs.map((j) => j.name);
+    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'news', 'daily']);
   });
 
   it('uses custom intervals from cfg', () => {
@@ -387,12 +439,43 @@ describe('defaultJobs', () => {
 
     await marketsJob.run();
 
-    assert.equal(deps.fetchMarketsCalled, 1, 'fetchMarkets called once');
-    assert.equal(deps.insertedMarkets.length, 1, '1 market snapshot inserted');
+    assert.equal(deps.fetchMarketsCalled,    1,     'fetchMarkets called once');
+    assert.equal(deps.insertedMarkets.length, 1,    '1 market snapshot inserted');
     assert.equal(deps.insertedMarkets[0]?.symbol, 'BTC');
   });
 
-  it('gdelt job: fetchGdelt() called → events inserted into store', async () => {
+  // T-11: usgs job calls upsertEvents, NOT insertGdeltEvents
+  it('usgs job: fetchUsgs() called → upsertEvents called with EventRow data', async () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+    const usgsJob = jobs.find((j) => j.name === 'usgs');
+    assert.ok(usgsJob, 'usgs job not found');
+
+    await usgsJob.run();
+
+    assert.equal(deps.fetchUsgsCalled,     1, 'fetchUsgs called once');
+    assert.equal(deps.upsertedEvents.length, 1, '1 event upserted');
+    assert.equal(deps.upsertedEvents[0]?.source,    'usgs');
+    assert.equal(deps.upsertedEvents[0]?.eventType, 'earthquake');
+  });
+
+  // T-11: eonet job calls upsertEvents
+  it('eonet job: fetchEonet() called → upsertEvents called with EventRow data', async () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+    const eonetJob = jobs.find((j) => j.name === 'eonet');
+    assert.ok(eonetJob, 'eonet job not found');
+
+    await eonetJob.run();
+
+    assert.equal(deps.fetchEonetCalled,    1, 'fetchEonet called once');
+    assert.equal(deps.upsertedEvents.length, 1, '1 event upserted');
+    assert.equal(deps.upsertedEvents[0]?.source,    'eonet');
+    assert.equal(deps.upsertedEvents[0]?.eventType, 'wildfire');
+  });
+
+  // T-11: gdelt job now calls upsertEvents (EventRow), NOT insertGdeltEvents (GdeltEvent)
+  it('gdelt job: fetchGdelt() returns EventRow → upsertEvents called (NOT insertGdeltEvents)', async () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
     const gdeltJob = jobs.find((j) => j.name === 'gdelt');
@@ -400,9 +483,34 @@ describe('defaultJobs', () => {
 
     await gdeltJob.run();
 
-    assert.equal(deps.fetchGdeltCalled, 1, 'fetchGdelt called once');
-    assert.equal(deps.insertedGdelt.length, 1, '1 gdelt event inserted');
-    assert.equal(deps.insertedGdelt[0]?.event_id, 'EV001');
+    assert.equal(deps.fetchGdeltCalled,    1, 'fetchGdelt called once');
+    assert.equal(deps.upsertedEvents.length, 1, '1 event upserted via upsertEvents');
+    assert.equal(deps.upsertedEvents[0]?.source,    'gdelt');
+    assert.equal(deps.upsertedEvents[0]?.eventType, 'conflict');
+
+    // Verify no reference to insertGdeltEvents in SchedulerDeps (type-level; runtime confirms there is no such property)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    assert.ok(!('insertGdeltEvents' in deps), 'insertGdeltEvents must not be part of SchedulerDeps');
+  });
+
+  // T-11: multiple event jobs accumulate to upsertEvents (all share the same dep)
+  it('usgs + eonet + gdelt all accumulate via shared upsertEvents dep', async () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+
+    const usgsJob  = jobs.find((j) => j.name === 'usgs')!;
+    const eonetJob = jobs.find((j) => j.name === 'eonet')!;
+    const gdeltJob = jobs.find((j) => j.name === 'gdelt')!;
+
+    await usgsJob.run();
+    await eonetJob.run();
+    await gdeltJob.run();
+
+    assert.equal(deps.upsertedEvents.length, 3, 'All 3 event jobs call upsertEvents (1 row each)');
+    const sources = deps.upsertedEvents.map((e) => e.source);
+    assert.ok(sources.includes('usgs'),  'usgs event persisted');
+    assert.ok(sources.includes('eonet'), 'eonet event persisted');
+    assert.ok(sources.includes('gdelt'), 'gdelt event persisted');
   });
 
   it('news job: fetchNews() called → items inserted into store', async () => {
@@ -413,7 +521,7 @@ describe('defaultJobs', () => {
 
     await newsJob.run();
 
-    assert.equal(deps.fetchNewsCalled, 1, 'fetchNews called once');
+    assert.equal(deps.fetchNewsCalled,    1, 'fetchNews called once');
     assert.equal(deps.insertedNews.length, 1, '1 news item inserted');
     assert.equal(deps.insertedNews[0]?.feed_domain, 'example.com');
   });
@@ -427,6 +535,39 @@ describe('defaultJobs', () => {
 
     assert.equal(deps.insertedMarkets.length, 0, 'no insert when connector returns empty');
     assert.equal(deps.fetchMarketsCalled, 1, 'connector still called even if empty');
+  });
+
+  it('usgs job: skips upsert when connector returns empty data', async () => {
+    const deps = makeDeps({ emptyUsgs: true });
+    const jobs = defaultJobs(undefined, deps);
+    const usgsJob = jobs.find((j) => j.name === 'usgs')!;
+
+    await usgsJob.run();
+
+    assert.equal(deps.upsertedEvents.length, 0, 'no upsert when usgs returns empty');
+    assert.equal(deps.fetchUsgsCalled, 1, 'fetchUsgs still called even if empty');
+  });
+
+  it('eonet job: skips upsert when connector returns empty data', async () => {
+    const deps = makeDeps({ emptyEonet: true });
+    const jobs = defaultJobs(undefined, deps);
+    const eonetJob = jobs.find((j) => j.name === 'eonet')!;
+
+    await eonetJob.run();
+
+    assert.equal(deps.upsertedEvents.length, 0, 'no upsert when eonet returns empty');
+    assert.equal(deps.fetchEonetCalled, 1, 'fetchEonet still called even if empty');
+  });
+
+  it('gdelt job: skips upsert when connector returns empty data', async () => {
+    const deps = makeDeps({ emptyGdelt: true });
+    const jobs = defaultJobs(undefined, deps);
+    const gdeltJob = jobs.find((j) => j.name === 'gdelt')!;
+
+    await gdeltJob.run();
+
+    assert.equal(deps.upsertedEvents.length, 0, 'no upsert when gdelt returns empty');
+    assert.equal(deps.fetchGdeltCalled, 1, 'fetchGdelt still called even if empty');
   });
 
   it('markets job: throws when connector throws (scheduler wraps this)', async () => {
@@ -445,7 +586,7 @@ describe('defaultJobs', () => {
     await dailyJob.run();
 
     assert.equal(deps.briefingCalled, 1, 'generateDailyBriefing called once');
-    assert.equal(deps.purgeCalled, 1, 'purgeAndDownsample called once');
+    assert.equal(deps.purgeCalled,    1, 'purgeAndDownsample called once');
   });
 
   it('daily job: purgeAndDownsample receives beforeMs = now - 90 days (approx)', async () => {
@@ -462,22 +603,22 @@ describe('defaultJobs', () => {
     assert.ok(purgeMs !== undefined, 'purgeAndDownsample should have been called');
     // beforeMs should be approximately (now - 90d) — allow 5s slack
     assert.ok(purgeMs >= before - NINETY_DAYS_MS - 5_000, 'purgeMs not too old');
-    assert.ok(purgeMs <= after - NINETY_DAYS_MS + 5_000, 'purgeMs not in the future');
+    assert.ok(purgeMs <= after  - NINETY_DAYS_MS + 5_000, 'purgeMs not in the future');
   });
 
   it('a failing daily job inside scheduler does not stop other jobs', async () => {
     let goodCount = 0;
 
     const failingDaily: Job = {
-      name: 'daily',
-      tier: 'daily',
+      name:      'daily',
+      tier:      'daily',
       intervalMs: 15,
       async run() { throw new Error('daily boom'); },
     };
 
     const goodJob: Job = {
-      name: 'good',
-      tier: 'fast',
+      name:      'good',
+      tier:      'fast',
       intervalMs: 15,
       async run() { goodCount++; },
     };

@@ -15,6 +15,8 @@
  *   GET /api/markets/:symbol
  *   GET /api/gdelt
  *   GET /api/briefing
+ *   GET /api/events/:source/:id   (T-12 — detail; more specific, checked first)
+ *   GET /api/events               (T-12 — list with filters)
  */
 
 import * as http from 'node:http';
@@ -26,7 +28,10 @@ import {
   getMarketTrend,
   getRecentGdeltEvents,
   getCachedBriefing,
+  getEvents,
+  getEvent,
 } from '@www/store';
+import type { EventFilter } from '@www/store';
 import { createScheduler, defaultJobs } from '@www/scheduler';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -226,6 +231,83 @@ async function route(
       return;
     }
     sendJson(res, 200, { briefing });
+    return;
+  }
+
+  // ── /api/events/:source/:id ───────────────────────────────────────────────
+  // More specific pattern — checked BEFORE /api/events (list) to avoid shadowing.
+  // raw_json is stored as a JSON string in EventRow; parsed here to return a proper
+  // JSON object in the response body (field: parsedRawJson). If unparseable, returns
+  // the raw string as-is so no information is lost.
+  const eventDetailMatch = pathname.match(/^\/api\/events\/([^/]+)\/([^/]+)$/);
+  if (eventDetailMatch) {
+    const source = decodeURIComponent(eventDetailMatch[1] ?? '');
+    const id = decodeURIComponent(eventDetailMatch[2] ?? '');
+    const event = await getEvent(source, id);
+    if (event === null) {
+      sendJson(res, 404, { error: 'Not Found' });
+      return;
+    }
+    // Parse raw_json string to object so clients receive clean JSON, not an
+    // escaped string. If it fails (malformed), send the string as-is.
+    let parsedRawJson: unknown = event.rawJson;
+    if (typeof event.rawJson === 'string') {
+      try {
+        parsedRawJson = JSON.parse(event.rawJson) as unknown;
+      } catch {
+        // keep rawJson as string — not a routing error
+      }
+    }
+    sendJson(res, 200, { ...event, rawJson: parsedRawJson });
+    return;
+  }
+
+  // ── /api/events ──────────────────────────────────────────────────────────
+  // D-107/ADR-004: SOLO-LECTURA. Never fires connectors on-request.
+  // Parses querystring into EventFilter; absent params are omitted (not set to undefined).
+  if (pathname === '/api/events') {
+    const filter: EventFilter = {};
+
+    const typeParam = url.searchParams.get('type');
+    if (typeParam !== null) filter.type = typeParam;
+
+    const categoryParam = url.searchParams.get('category');
+    if (categoryParam === 'natural' || categoryParam === 'conflict') {
+      filter.category = categoryParam;
+    }
+
+    const sinceParam = url.searchParams.get('since');
+    if (sinceParam !== null) {
+      const sinceMs = Number(sinceParam);
+      if (Number.isFinite(sinceMs)) filter.sinceMs = sinceMs;
+    }
+
+    const minSevParam = url.searchParams.get('minSeverity');
+    if (minSevParam !== null) {
+      const minSev = Number(minSevParam);
+      if (Number.isFinite(minSev)) filter.minSeverity = minSev;
+    }
+
+    const limitParam = url.searchParams.get('limit');
+    if (limitParam !== null) {
+      const limit = Number(limitParam);
+      if (Number.isFinite(limit) && limit > 0) filter.limit = Math.floor(limit);
+    }
+
+    const bboxParam = url.searchParams.get('bbox');
+    if (bboxParam !== null) {
+      const parts = bboxParam.split(',').map(Number);
+      if (
+        parts.length === 4 &&
+        parts.every((n) => Number.isFinite(n))
+      ) {
+        filter.bbox = parts as [number, number, number, number];
+      }
+      // If not 4 valid floats, bbox is silently ignored (T-12 constraint)
+    }
+
+    const events = await getEvents(filter);
+    sendJson(res, 200, events);
     return;
   }
 

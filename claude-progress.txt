@@ -27,3 +27,25 @@
 - PRÓXIMA SESIÓN (mañana): plan de la capa de eventos globales → /check-plan → implementar (3 conectores + tabla `events` unificada + capas mapa por tipo). Resumir nada: leer agent-comms.md (últimas entradas) + memory + los 3 design-docs.
 - Pendiente usuario: borrar image.png (captura facturación, sin trackear).
 - [2026-06-13] QA E2E post-fix contraste: PASS. 7/7 instrumentos, mapa OK, responsive OK. 0 bugs. Ver plans/qa-report-2026-06-13.md.
+
+[2026-06-14] Fase 2 / rebanada 1 — Capa de eventos globales: Plan + check + Wave A
+- Plan plans/2026-06-14-global-events.md (8 tareas T-08..T-14, 5 waves) → /check-plan = PASS (0 bloqueantes, 4 warnings). OQ-2 = DROP sin migrar (usuario). 5 correcciones de realidad C-1..C-5 (migración=002 no 003; purge→events; getRecentGdeltEvents retro-compat; ZIP zero-dep; barrel=PM).
+- WAVE A COMPLETA+VERIFIED: T-08 store (events unificado + migración 002 DROP gdelt_events + upsert/get API + retro-compat) 32/32 tests; T-09 severity (severityUsgs/Eonet/Gdelt 0..100 re-derivado no-AGPL) 36/36 tests. Global tsc EXIT 0.
+- WAVE B COMPLETA+VERIFIED: T-10a usgs 15/15 (significant_week+all_day, dedup), T-10b eonet 26/26 (7 cat, descarta earthquakes EONET), T-10c gdelt REFACTOR 35/35 (raw Events CSV, ZIP zero-dep zlib.inflateRawSync, 61-col por índice, coords reales). Consolidado: 148/148 tests conectores, global tsc EXIT 0. Barrel cableado por PM (fetchUsgs/fetchEonet/fetchGdelt→EventRow).
+- Fix integración PM (gotcha → memoria): cross-package types resuelven vía dist construido (no src) → rebuild upstream tras cambiar API; exactOptionalPropertyTypes en severity params. tsx per-file no typecheck cross-file → tsc consolidado del PM imprescindible.
+- WAVE C COMPLETA+VERIFIED: T-11 scheduler 24/24 (jobs usgs/eonet/gdelt→upsertEvents, insertGdeltEvents eliminado, firma defaultJobs intacta). scheduler dist rebuilt, global tsc EXIT 0.
+- WAVE D COMPLETA+VERIFIED: T-12 server.ts 26/26 (/api/events con filtros + /api/events/:source/:id raw_json parseado; pipeline middleware intacto; /api/gdelt retro-compat; solo-lectura). Global tsc limpio.
+- WAVE E (FINAL) COMPLETA: T-13 web (capas por tipo + EventsPanel + atribución, tsc+build EXIT 0; truncó reporte, PM remató verify) ‖ T-14 briefing (buildGlobalRiskContext + serializeContext desde getEvents, D-106 intacto) 27/27.
+- LAS 8 TAREAS IMPLEMENTADAS. Consolidado PM: web build OK, global tsc EXIT 0, SUITE 257/257 (store 32 + connectors 148 + scheduler 24 + core-ai 27 + server 26).
+- GATE /verify = VERIFIED (PM goal-backward; verifier truncó por turnos) + SMOKE EN VIVO = PASS. Build/tests: global tsc EXIT 0, 257/257 tests, web build OK. G-1..9 cumplidos en código real. SMOKE (server real :8787, conectores live): migración 002 OK (gdelt_events dropada), usgs 245 eventos, gdelt 650 (coords reales ActionGeo), news 89, markets 7, briefing live gpt-5.4. /api/events + filtros + /api/events/:source/:id + /api/gdelt retro-compat + 404 ✓.
+- FOLLOW-UPS honestos (no bloquean): (1) EONET devolvió 0 en vivo (upstream 503 transitorio; conector degradó gracioso; re-check próximo ciclo). (2) GDELT QuadClass 1/2 cooperación etiquetado conflict severity-baja = ruido, mitigado por minSeverity (briefing usa 20); calibración OQ-3/OQ-4.
+- EN CURSO: qa-tester UI 375/1200px. Si PASS → declarar rebanada VERIFIED + marcar ROADMAP + (commit = aprobación humana). Pendiente usuario: borrar image.png (captura facturación, sin trackear).
+
+[2026-06-14] QA-TESTER — Analisis estatico capa eventos globales: BUG CRITICO detectado. Bash bloqueado → no pudo arrancar entorno ni Playwright. Ver qa-report-2026-06-14.md y agent-comms [QA-TESTER][BLOCKED]. Fix urgente: contrato camelCase/snake_case roto en client.ts RawEventRow → mapa no muestra ningun punto aunque /api/events funcione.
+
+[2026-06-14] BUG-1 FIXEADO + REBANADA 1 FASE 2 CERRADA Y VERIFIED.
+- FIX (PM): client.ts RawEventRow + adaptEventRow snake_case → camelCase (wire de @www/store es camelCase, verificado por curl). web tsc+build OK.
+- BROWSER E2E (PM corrió Playwright, qa-tester tenia Bash bloqueado; events-e2e.mjs): render 30 eventos (types conflict/protest, badTypes=0), toggle 30→0 OK, responsive 375 sin overflow + drawer, 0 errores consola/red. VERDICT PASS. Screenshots plans/screenshots/events-*.png.
+- GATE COMPLETO: /verify goal-backward VERIFIED + 257/257 tests + global tsc + web build + smoke API en vivo (usgs 245/gdelt 650/briefing gpt-5.4) + browser E2E PASS. ROADMAP 11/16 (69%).
+- LECCION reforzada: el E2E de navegador cazo un bug de contrato (parser cliente) que 257 tests + tsc + verifier + smoke-curl NO vieron (el curl ve el wire OK; el bug estaba en el cliente). Verde+API-OK ≠ UI funciona.
+- PENDIENTE usuario: commit (aprobacion humana); borrar image.png (sin trackear). FOLLOW-UPS no-bloqueantes: EONET re-check; ruido GDELT QuadClass1/2 (OQ-3/OQ-4).

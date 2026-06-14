@@ -16,7 +16,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, _resetDbForTesting } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, _resetDbForTesting } from '@www/store';
+import type { EventRow } from '@www/store';
 import { createApp } from './server.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -67,6 +68,71 @@ describe('server.ts integration', () => {
         captured_at: now,
       },
     ]);
+
+    // Seed events for T-12 tests
+    const seedEvents: EventRow[] = [
+      {
+        source: 'usgs',
+        sourceEventId: 'usgs-test-001',
+        eventType: 'earthquake',
+        category: 'natural',
+        severity: 72,
+        lat: 34.5,
+        lon: -118.2,
+        country: 'US',
+        title: 'M 4.5 - Southern California',
+        url: 'https://earthquake.usgs.gov/earthquakes/eventpage/usgs-test-001',
+        occurredAt: now - 3600_000,
+        capturedAt: now - 1000,
+        rawJson: JSON.stringify({ mag: 4.5, sig: 300, alert: null, tsunami: 0 }),
+      },
+      {
+        source: 'eonet',
+        sourceEventId: 'EONET_TEST_002',
+        eventType: 'wildfire',
+        category: 'natural',
+        severity: 55,
+        lat: 37.8,
+        lon: -122.4,
+        country: 'US',
+        title: 'Wildfire near Oakland',
+        url: 'https://eonet.gsfc.nasa.gov/api/v3/events/EONET_TEST_002',
+        occurredAt: now - 7200_000,
+        capturedAt: now - 500,
+        rawJson: JSON.stringify({ categories: ['wildfires'], closed: null }),
+      },
+      {
+        source: 'gdelt',
+        sourceEventId: 'gdelt-test-003',
+        eventType: 'conflict',
+        category: 'conflict',
+        severity: 60,
+        lat: 48.8,
+        lon: 2.35,
+        country: 'FR',
+        title: 'Protest in Paris',
+        url: 'https://gdeltproject.org/events/gdelt-test-003',
+        occurredAt: now - 10_800_000,
+        capturedAt: now - 200,
+        rawJson: JSON.stringify({ quadClass: 3, goldstein: -5.0, avgTone: -3.2 }),
+      },
+      {
+        source: 'usgs',
+        sourceEventId: 'usgs-test-004',
+        eventType: 'earthquake',
+        category: 'natural',
+        severity: 30,
+        lat: 51.5,
+        lon: -0.1,
+        country: 'GB',
+        title: 'M 2.1 - UK',
+        url: null,
+        occurredAt: now - 86_400_000, // 1 day ago — for sinceMs filter test
+        capturedAt: now - 86_400_000,
+        rawJson: null,
+      },
+    ];
+    await upsertEvents(seedEvents);
 
     // Start server on ephemeral port (no scheduler)
     server = createApp({ startScheduler: false });
@@ -180,5 +246,169 @@ describe('server.ts integration', () => {
       req.end();
     });
     assert.equal(status, 405);
+  });
+
+  // ── /api/events (T-12) ────────────────────────────────────────────────────
+
+  it('GET /api/events → 200 with seeded events', async () => {
+    const { status, body } = await get(server, '/api/events');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as unknown[];
+    assert.ok(Array.isArray(rows), 'should be an array');
+    assert.ok(rows.length >= 4, 'should return all 4 seeded events');
+  });
+
+  it('GET /api/events?type=earthquake → filters by eventType', async () => {
+    const { status, body } = await get(server, '/api/events?type=earthquake');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ eventType: string }>;
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.length >= 1, 'should have earthquake events');
+    assert.ok(rows.every((r) => r.eventType === 'earthquake'), 'all rows should be earthquake');
+  });
+
+  it('GET /api/events?category=conflict → filters by category', async () => {
+    const { status, body } = await get(server, '/api/events?category=conflict');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ category: string }>;
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.every((r) => r.category === 'conflict'), 'all rows should be conflict');
+  });
+
+  it('GET /api/events?category=natural → filters natural events', async () => {
+    const { status, body } = await get(server, '/api/events?category=natural');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ category: string }>;
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.length >= 1, 'should have natural events');
+    assert.ok(rows.every((r) => r.category === 'natural'), 'all rows should be natural');
+  });
+
+  it('GET /api/events?minSeverity=60 → filters by severity', async () => {
+    const { status, body } = await get(server, '/api/events?minSeverity=60');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ severity: number }>;
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.length >= 1);
+    // usgs-test-001 (72) and gdelt-test-003 (60) should appear; usgs-test-004 (30) and eonet (55) should not
+    assert.ok(rows.every((r) => r.severity >= 60), 'all rows severity >= 60');
+  });
+
+  it('GET /api/events?since=<recent> → filters by capturedAt', async () => {
+    const since = Date.now() - 60_000; // last 60 seconds — only recent captures qualify
+    const { status, body } = await get(server, `/api/events?since=${since}`);
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ capturedAt: number }>;
+    assert.ok(Array.isArray(rows));
+    // The 3 recent events (capturedAt < 8s ago) qualify; usgs-test-004 (1 day ago) does not
+    assert.ok(rows.every((r) => r.capturedAt >= since), 'all rows within sinceMs window');
+    // usgs-test-004 (capturedAt = now-86400000) must NOT be in results
+    const hasOld = rows.some((r) => r.capturedAt < since);
+    assert.equal(hasOld, false, 'old event should be excluded');
+  });
+
+  it('GET /api/events?limit=2 → respects limit', async () => {
+    const { status, body } = await get(server, '/api/events?limit=2');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as unknown[];
+    assert.ok(Array.isArray(rows));
+    assert.equal(rows.length, 2, 'should return at most 2 rows');
+  });
+
+  it('GET /api/events?bbox=<bbox enclosing US West Coast> → filters by bbox', async () => {
+    // bbox: minLon=-125, minLat=30, maxLon=-100, maxLat=50 — covers CA/OR/WA
+    const { status, body } = await get(server, '/api/events?bbox=-125,30,-100,50');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ lat: number; lon: number; sourceEventId: string }>;
+    assert.ok(Array.isArray(rows));
+    // usgs-test-001 (lat=34.5, lon=-118.2) and eonet-002 (lat=37.8, lon=-122.4) are in bbox
+    const ids = rows.map((r) => r.sourceEventId);
+    assert.ok(ids.includes('usgs-test-001'), 'usgs-test-001 should be in bbox result');
+    assert.ok(ids.includes('EONET_TEST_002'), 'EONET_TEST_002 should be in bbox result');
+    // gdelt (lon=2.35) and usgs-004 (lon=-0.1) are outside — should NOT appear
+    assert.ok(!ids.includes('gdelt-test-003'), 'gdelt-test-003 (Paris) should be outside bbox');
+    assert.ok(!ids.includes('usgs-test-004'), 'usgs-test-004 (UK) should be outside bbox');
+  });
+
+  it('GET /api/events?bbox=<invalid> → ignores bad bbox, returns all events', async () => {
+    // Malformed bbox (only 3 values) → silently ignored → returns all events
+    const { status, body } = await get(server, '/api/events?bbox=1,2,3');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as unknown[];
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.length >= 4, 'bad bbox is ignored; all 4 events should be returned');
+  });
+
+  // ── /api/events/:source/:id (T-12) ────────────────────────────────────────
+
+  it('GET /api/events/usgs/usgs-test-001 → 200 with event detail + parsed rawJson', async () => {
+    const { status, body } = await get(server, '/api/events/usgs/usgs-test-001');
+    assert.equal(status, 200);
+    const event = JSON.parse(body) as {
+      source: string;
+      sourceEventId: string;
+      eventType: string;
+      rawJson: { mag?: number } | null;
+    };
+    assert.equal(event.source, 'usgs');
+    assert.equal(event.sourceEventId, 'usgs-test-001');
+    assert.equal(event.eventType, 'earthquake');
+    // raw_json was stored as a JSON string; the endpoint parses it to an object
+    assert.ok(event.rawJson !== null, 'rawJson should be present');
+    assert.ok(typeof event.rawJson === 'object', 'rawJson should be parsed to object, not string');
+    assert.equal((event.rawJson as { mag: number }).mag, 4.5);
+  });
+
+  it('GET /api/events/usgs/does-not-exist → 404', async () => {
+    const { status, body } = await get(server, '/api/events/usgs/does-not-exist');
+    assert.equal(status, 404);
+    const json = JSON.parse(body) as { error: string };
+    assert.equal(json.error, 'Not Found');
+  });
+
+  it('GET /api/events/eonet/EONET_TEST_002 → 200', async () => {
+    const { status, body } = await get(server, '/api/events/eonet/EONET_TEST_002');
+    assert.equal(status, 200);
+    const event = JSON.parse(body) as { source: string; eventType: string };
+    assert.equal(event.source, 'eonet');
+    assert.equal(event.eventType, 'wildfire');
+  });
+
+  it('GET /api/events/usgs/usgs-test-004 → 200 with null rawJson', async () => {
+    // Event seeded with rawJson: null
+    const { status, body } = await get(server, '/api/events/usgs/usgs-test-004');
+    assert.equal(status, 200);
+    const event = JSON.parse(body) as { rawJson: null };
+    assert.equal(event.rawJson, null);
+  });
+
+  // ── /api/gdelt retro-compat (T-12 acceptance) ─────────────────────────────
+
+  it('GET /api/gdelt → 200 still reads events source=gdelt (retro-compat)', async () => {
+    const { status, body } = await get(server, '/api/gdelt');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ source: string; event_id?: string }>;
+    assert.ok(Array.isArray(rows), 'should be an array');
+    // The seeded gdelt event should appear via getRecentGdeltEvents
+    // (which reads events WHERE source='gdelt')
+    assert.ok(rows.length >= 1, 'should return at least the seeded gdelt event');
+    assert.ok(rows.every((r) => r.source === 'gdelt'), 'all rows should have source=gdelt');
+  });
+
+  // ── Fase 1 endpoints still green (regression guard) ──────────────────────
+
+  it('GET /api/health still 200 after T-12 routes added', async () => {
+    const { status } = await get(server, '/api/health');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/markets still 200 after T-12 routes added', async () => {
+    const { status } = await get(server, '/api/markets');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/briefing still 200 after T-12 routes added', async () => {
+    const { status } = await get(server, '/api/briefing');
+    assert.equal(status, 200);
   });
 });

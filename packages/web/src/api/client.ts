@@ -8,6 +8,7 @@
  *   /api/markets/:sym → MarketSnapshot[]   (bare array, ordered = trend)
  *   /api/gdelt        → RawGdeltEvent[]    (bare array, may be empty)
  *   /api/briefing     → { briefing: RawBriefing | null }
+ *   /api/events       → EventRow[]         (T-13 / T-12, bare array)
  */
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,33 @@ interface RawBriefingResponse {
   briefing: RawBriefing | null;
 }
 
+/**
+ * Raw event row from /api/events — matches EventRow in @www/store (T-08).
+ * Typed locally so web never imports @www/store (boundary rule).
+ *
+ * WIRE FORMAT = camelCase. @www/store serializes EventRow (camelCase TS fields)
+ * directly via JSON.stringify with NO snake_case transform — verified via curl:
+ * `{"source":"usgs","sourceEventId":"us7000srb1","eventType":"earthquake","capturedAt":...}`.
+ * (Distinto de MarketSnapshot/RawGdeltEvent, que SÍ son snake_case porque esas
+ * columnas del store se exponen tal cual.) BUG-1 fix (qa-tester 2026-06-14).
+ */
+interface RawEventRow {
+  id: number;
+  source: string;                  // 'usgs' | 'eonet' | 'gdelt'
+  sourceEventId: string;
+  eventType: string;               // 'earthquake' | 'wildfire' | 'volcano' | 'storm' | 'flood' | 'conflict' | 'protest' | ...
+  category: string;                // 'natural' | 'conflict'
+  severity: number | null;         // 0..100 (may be null for legacy rows)
+  lat: number | null;
+  lon: number | null;
+  country: string | null;
+  title: string | null;
+  url: string | null;
+  occurredAt: number | null;       // epoch ms
+  capturedAt: number;              // epoch ms
+  rawJson: string | null;          // stringified JSON with source-specific fields
+}
+
 // ---------------------------------------------------------------------------
 // View-models (public contract for components)
 // ---------------------------------------------------------------------------
@@ -86,6 +114,45 @@ export interface BriefingResponse {
   domain: string;
 }
 
+/**
+ * View-model for a global event consumed by EventsPanel + MapView.
+ * Derived from RawEventRow; always has valid lat/lon (rows without coords are dropped).
+ */
+export interface GlobalEvent {
+  /** Unique key: `{source}:{source_event_id}` */
+  key: string;
+  source: string;
+  sourceEventId: string;
+  eventType: string;        // 'earthquake' | 'wildfire' | 'volcano' | 'storm' | 'flood' | 'conflict' | 'protest'
+  category: string;         // 'natural' | 'conflict'
+  severity: number;         // 0..100 (defaulted to 0 when null)
+  lat: number;
+  lng: number;
+  country: string | null;
+  title: string;
+  url: string | null;
+  occurredAt: string | null;   // ISO string or null
+  capturedAt: string;          // ISO string
+}
+
+/**
+ * Filter params for /api/events.
+ * All fields are optional; absent fields are not sent in the querystring.
+ */
+export interface EventFilter {
+  type?: string;
+  category?: string;
+  minSeverity?: number;
+  since?: number;    // epoch ms
+  limit?: number;
+  bbox?: [number, number, number, number];  // [minLon, minLat, maxLon, maxLat]
+}
+
+export interface EventsResponse {
+  events: GlobalEvent[];
+  fetchedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter helpers
 // ---------------------------------------------------------------------------
@@ -117,6 +184,26 @@ function adaptGdeltEvent(e: RawGdeltEvent): GdeltEvent | null {
     lng: e.lon,
     category: e.category,
     severity: e.severity ?? 0,
+  };
+}
+
+function adaptEventRow(e: RawEventRow): GlobalEvent | null {
+  // Rows without coordinates cannot be plotted — discard silently
+  if (e.lat == null || e.lon == null) return null;
+  return {
+    key: `${e.source}:${e.sourceEventId}`,
+    source: e.source,
+    sourceEventId: e.sourceEventId,
+    eventType: e.eventType,
+    category: e.category,
+    severity: e.severity ?? 0,
+    lat: e.lat,
+    lng: e.lon,
+    country: e.country,
+    title: e.title ?? e.eventType,
+    url: e.url,
+    occurredAt: e.occurredAt != null ? new Date(e.occurredAt).toISOString() : null,
+    capturedAt: new Date(e.capturedAt).toISOString(),
   };
 }
 
@@ -178,5 +265,39 @@ export async function getBriefing(domain = 'finance'): Promise<BriefingResponse>
     briefing: raw.briefing?.body_md ?? 'Briefing no disponible.',
     generatedAt: raw.briefing ? new Date(raw.briefing.created_at).toISOString() : '',
     domain: raw.briefing?.domain ?? domain,
+  };
+}
+
+/**
+ * Fetch global events from /api/events with optional filters.
+ * Rows without lat/lon are discarded (cannot be plotted).
+ *
+ * Attribution (D-107 / feedback_data_tos):
+ *  - USGS: "U.S. Geological Survey" (public domain)
+ *  - EONET: "Data: NASA EONET" (public domain)
+ *  - GDELT: "Source: The GDELT Project (gdeltproject.org)"
+ */
+export async function getEvents(filter?: EventFilter): Promise<EventsResponse> {
+  const params = new URLSearchParams();
+
+  if (filter) {
+    if (filter.type !== undefined) params.set('type', filter.type);
+    if (filter.category !== undefined) params.set('category', filter.category);
+    if (filter.minSeverity !== undefined) params.set('minSeverity', String(filter.minSeverity));
+    if (filter.since !== undefined) params.set('since', String(filter.since));
+    if (filter.limit !== undefined) params.set('limit', String(filter.limit));
+    if (filter.bbox !== undefined) params.set('bbox', filter.bbox.join(','));
+  }
+
+  const qs = params.toString();
+  const path = qs ? `/api/events?${qs}` : '/api/events';
+  const raw = await apiFetch<RawEventRow[]>(path);
+  const events: GlobalEvent[] = Array.isArray(raw)
+    ? raw.map(adaptEventRow).filter((e): e is GlobalEvent => e !== null)
+    : [];
+
+  return {
+    events,
+    fetchedAt: new Date().toISOString(),
   };
 }

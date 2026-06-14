@@ -4,19 +4,25 @@
  * Sources are registered once in map.on('load').
  * Layer visibility is controlled declaratively via activeLayers + LAYERS config.
  * Data is injected via source.setData() in useEffect — NEVER via addLayer outside LAYERS.
+ *
+ * T-13: Source 'events' replaces legacy 'gdelt-events'.
+ *   - getEvents() fetches all event types from /api/events.
+ *   - Each EventRow → GeoJSON Feature Point with properties { event_type, severity, title, country }.
+ *   - Per-type filtering is done in LAYERS via filterExpr (MapLibre filter expression).
+ *   - Legacy gdelt-events source + getGdelt() removed (OQ-2 / C-3 complete).
  */
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
 import { LAYERS, LAYER_SOURCES } from './layers.config';
-import { getGdelt, type GdeltEvent } from '../api/client';
+import { getEvents, type GlobalEvent } from '../api/client';
 
 interface Props {
   activeLayers: Set<string>;
 }
 
-/** Convert GDELT events to a GeoJSON FeatureCollection */
-function eventsToGeoJSON(events: GdeltEvent[]): GeoJSON.FeatureCollection {
+/** Convert GlobalEvent array to a GeoJSON FeatureCollection for the 'events' source. */
+function eventsToGeoJSON(events: GlobalEvent[]): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: events.map((e) => ({
@@ -26,9 +32,14 @@ function eventsToGeoJSON(events: GdeltEvent[]): GeoJSON.FeatureCollection {
         coordinates: [e.lng, e.lat],
       },
       properties: {
-        eventId: e.eventId,
+        key: e.key,
+        event_type: e.eventType,
         category: e.category,
         severity: e.severity,
+        title: e.title,
+        country: e.country ?? '',
+        source: e.source,
+        occurred_at: e.occurredAt ?? '',
       },
     })),
   };
@@ -40,7 +51,7 @@ const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
   features: [],
 };
 
-/** Source data keyed by source id */
+/** Source data keyed by source id — all start empty */
 const SOURCE_INITIAL_DATA: Record<string, GeoJSON.FeatureCollection> = {};
 for (const id of LAYER_SOURCES) {
   SOURCE_INITIAL_DATA[id] = EMPTY_GEOJSON;
@@ -105,17 +116,23 @@ export default function MapView({ activeLayers }: Props) {
       for (const spec of LAYERS) {
         if (map.getLayer(spec.id)) continue;
 
-        const layerDef: maplibregl.LayerSpecification = {
+        // Build a plain object and cast to LayerSpecification at the call site.
+        // Using 'as unknown as LayerSpecification' avoids the exactOptionalPropertyTypes
+        // discriminant-union error that TypeScript raises when you spread optional fields
+        // (filter, paint) into a discriminated LayerSpecification union — the runtime
+        // object is always valid because MapLibre's addLayer accepts any spec object.
+        const layerDef = {
           id: spec.id,
-          type: spec.type as maplibregl.LayerSpecification['type'],
+          type: spec.type,
           source: spec.source,
-          ...(spec.paint ? { paint: spec.paint as Record<string, unknown> } : {}),
-          ...(spec.layout ? { layout: spec.layout as Record<string, unknown> } : {}),
+          // Per-type filter expression (splits a shared source by event_type)
+          ...(spec.filterExpr !== undefined ? { filter: spec.filterExpr } : {}),
+          ...(spec.paint !== undefined ? { paint: spec.paint } : {}),
           layout: {
             ...(spec.layout as Record<string, unknown> | undefined),
             visibility: 'none', // all start hidden; controlled by activeLayers effect
           },
-        };
+        } as unknown as maplibregl.LayerSpecification;
 
         map.addLayer(layerDef);
       }
@@ -157,7 +174,8 @@ export default function MapView({ activeLayers }: Props) {
     };
   }, [activeLayers]);
 
-  // Load GDELT data and inject into source
+  // Load events data from /api/events and inject into the 'events' source.
+  // One useEffect for this data type — sets data once loaded (T-13 / D-003).
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -166,12 +184,12 @@ export default function MapView({ activeLayers }: Props) {
 
     const load = async () => {
       try {
-        const data = await getGdelt();
+        const data = await getEvents();
         if (cancelled) return;
 
         const injectData = () => {
           if (!map || !mapReadyRef.current) return;
-          const source = map.getSource('gdelt-events') as GeoJSONSource | undefined;
+          const source = map.getSource('events') as GeoJSONSource | undefined;
           if (source) {
             source.setData(eventsToGeoJSON(data.events));
           }
@@ -183,7 +201,8 @@ export default function MapView({ activeLayers }: Props) {
           map.once('load', injectData);
         }
       } catch {
-        // Graceful: upstream failure leaves source as empty GeoJSON (no crash)
+        // Graceful: upstream failure leaves source as empty GeoJSON (no crash).
+        // The panel shows an error state independently via its own fetch.
       }
     };
 

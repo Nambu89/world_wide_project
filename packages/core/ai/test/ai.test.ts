@@ -11,16 +11,20 @@
 //   7. resolveChain() marca claude available:true cuando ANTHROPIC_API_KEY presente.
 //   8. pickProvider() devuelve null cuando ningún proveedor disponible.
 //   9. pickProvider() devuelve 'openai' cuando OPENAI_API_KEY está presente (rama activa MVP).
-//  10. generateDailyBriefing() con caché válida NO llama a OpenAI (mock que cuenta llamadas).
+//  10. generateDailyBriefing() con caché válida NO llama al proveedor LLM (D-106).
 //  11. serializeContext() produce texto coherente con los datos de entrada.
 //  12. generateDailyBriefing() sin proveedor degrada a mensaje "no disponible".
+//  13. buildGlobalRiskContext() devuelve '' si events vacío.
+//  14. buildGlobalRiskContext() incluye tipo/país/severity con eventos reales.
+//  15. serializeContext() incluye bloque de riesgo global desde eventos multi-fuente (EventRow[]).
+//  16. generateDailyBriefing() con caché válida no llama proveedor — D-106 preservado (mock).
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 // Importaciones del paquete (NodeNext: extensiones .js en imports relativos)
 import { resolveChain, pickProvider } from '../src/router.js';
-import { serializeContext, generateDailyBriefing } from '../src/briefing.js';
+import { serializeContext, generateDailyBriefing, buildGlobalRiskContext } from '../src/briefing.js';
 import { buildBriefingPrompt, FINANCIAL_ANALYST_PERSONA } from '../src/persona.js';
 
 // Importaciones del store para tests de integración con DB :memory:
@@ -28,10 +32,10 @@ import {
   _resetDbForTesting,
   migrate,
   insertMarketSnapshots,
-  insertGdeltEvents,
+  upsertEvents,
   saveBriefing,
   type MarketSnapshot,
-  type GdeltEvent,
+  type EventRow,
   type Briefing,
 } from '@www/store';
 
@@ -194,12 +198,186 @@ describe('pickProvider()', () => {
   );
 });
 
-// ─── Suite 3: serializeContext() ──────────────────────────────────────────────
+// ─── Suite 3: buildGlobalRiskContext() (T-14) ─────────────────────────────────
+
+describe('buildGlobalRiskContext()', () => {
+  test('devuelve "" si la lista de eventos está vacía', () => {
+    const result = buildGlobalRiskContext([]);
+    assert.equal(result, '', 'debe devolver cadena vacía para lista vacía');
+  });
+
+  test('incluye tipo, país, severity y timestamp con un evento real', () => {
+    const events: EventRow[] = [
+      {
+        source: 'usgs',
+        sourceEventId: 'usgs-001',
+        eventType: 'earthquake',
+        category: 'natural',
+        severity: 72,
+        lat: 37.5,
+        lon: 15.0,
+        country: 'IT',
+        title: 'M 5.8 - Sicily, Italy',
+        url: null,
+        occurredAt: NOW - 3600_000,
+        capturedAt: NOW - 3000_000,
+        rawJson: null,
+      },
+    ];
+    const result = buildGlobalRiskContext(events);
+    assert.ok(result.includes('earthquake'), 'debe incluir el tipo de evento');
+    assert.ok(result.includes('IT'), 'debe incluir el país');
+    assert.ok(result.includes('72'), 'debe incluir la severity');
+    assert.ok(result !== '', 'no debe devolver cadena vacía con eventos');
+  });
+
+  test('incluye eventos de múltiples fuentes (usgs + gdelt + eonet)', () => {
+    const events: EventRow[] = [
+      {
+        source: 'usgs',
+        sourceEventId: 'usgs-q1',
+        eventType: 'earthquake',
+        category: 'natural',
+        severity: 85,
+        lat: 35.0,
+        lon: 139.0,
+        country: 'JP',
+        title: 'M 6.5 - Near Tokyo',
+        url: null,
+        occurredAt: NOW - 7200_000,
+        capturedAt: NOW - 6000_000,
+        rawJson: null,
+      },
+      {
+        source: 'gdelt',
+        sourceEventId: 'gdelt-c1',
+        eventType: 'conflict',
+        category: 'conflict',
+        severity: 60,
+        lat: 33.9,
+        lon: 35.5,
+        country: 'LB',
+        title: 'Armed conflict reported',
+        url: null,
+        occurredAt: NOW - 10800_000,
+        capturedAt: NOW - 9000_000,
+        rawJson: null,
+      },
+      {
+        source: 'eonet',
+        sourceEventId: 'eonet-f1',
+        eventType: 'wildfire',
+        category: 'natural',
+        severity: 45,
+        lat: 37.8,
+        lon: -122.4,
+        country: 'US',
+        title: 'Wildfire Northern California',
+        url: null,
+        occurredAt: NOW - 18000_000,
+        capturedAt: NOW - 15000_000,
+        rawJson: null,
+      },
+    ];
+    const result = buildGlobalRiskContext(events);
+    assert.ok(result.includes('earthquake'), 'debe incluir tipo earthquake');
+    assert.ok(result.includes('conflict'), 'debe incluir tipo conflict');
+    assert.ok(result.includes('wildfire'), 'debe incluir tipo wildfire');
+    assert.ok(result.includes('JP'), 'debe incluir país JP');
+    assert.ok(result.includes('LB'), 'debe incluir país LB');
+    assert.ok(result.includes('US'), 'debe incluir país US');
+  });
+
+  test('ordena por severity desc (el de mayor severity aparece primero)', () => {
+    const events: EventRow[] = [
+      {
+        source: 'eonet',
+        sourceEventId: 'low-sev',
+        eventType: 'storm',
+        category: 'natural',
+        severity: 30,
+        lat: 25.0,
+        lon: -80.0,
+        country: 'US',
+        title: 'Storm',
+        url: null,
+        occurredAt: NOW,
+        capturedAt: NOW,
+        rawJson: null,
+      },
+      {
+        source: 'usgs',
+        sourceEventId: 'high-sev',
+        eventType: 'earthquake',
+        category: 'natural',
+        severity: 90,
+        lat: 35.0,
+        lon: 139.0,
+        country: 'JP',
+        title: 'Big quake',
+        url: null,
+        occurredAt: NOW - 1000,
+        capturedAt: NOW - 1000,
+        rawJson: null,
+      },
+    ];
+    const result = buildGlobalRiskContext(events);
+    const idxEq = result.indexOf('earthquake');
+    const idxSt = result.indexOf('storm');
+    assert.ok(idxEq < idxSt, 'earthquake (severity 90) debe aparecer antes que storm (severity 30)');
+  });
+
+  test('limita a top-10 aunque haya más eventos', () => {
+    const events: EventRow[] = Array.from({ length: 15 }, (_, i) => ({
+      source: 'usgs' as const,
+      sourceEventId: `usgs-${String(i).padStart(3, '0')}`,
+      eventType: 'earthquake',
+      category: 'natural' as const,
+      severity: 50 - i,
+      lat: 35.0 + i,
+      lon: 139.0,
+      country: 'JP',
+      title: `Quake ${i}`,
+      url: null,
+      occurredAt: NOW - i * 3600_000,
+      capturedAt: NOW - i * 3600_000,
+      rawJson: null,
+    }));
+    const result = buildGlobalRiskContext(events);
+    // Solo deben aparecer los primeros 10; el evento 11 (i=10, sev=40) no
+    const lineCount = result.split('\n').filter((l) => l.trim().startsWith('-')).length;
+    assert.equal(lineCount, 10, 'debe limitar a 10 líneas de eventos');
+  });
+
+  test('usa "—" si el país es null', () => {
+    const events: EventRow[] = [
+      {
+        source: 'eonet',
+        sourceEventId: 'eonet-unknown',
+        eventType: 'volcano',
+        category: 'natural',
+        severity: 55,
+        lat: -10.0,
+        lon: 150.0,
+        country: null,
+        title: 'Volcanic activity',
+        url: null,
+        occurredAt: NOW - 5000,
+        capturedAt: NOW,
+        rawJson: null,
+      },
+    ];
+    const result = buildGlobalRiskContext(events);
+    assert.ok(result.includes('—'), 'debe mostrar "—" cuando el país es null');
+  });
+});
+
+// ─── Suite 4: serializeContext() (T-14: EventRow[] en vez de GdeltEvent[]) ───
 
 describe('serializeContext()', () => {
   test('con arrays vacíos produce texto con mensajes sin datos', () => {
     const result = serializeContext([], []);
-    assert.ok(result.includes('sin datos'), 'debe indicar sin datos para mercados');
+    assert.ok(result.includes('sin datos') || result.includes('sin eventos'), 'debe indicar sin datos');
     assert.ok(result.includes('Fecha de generación'), 'debe incluir fecha');
   });
 
@@ -230,42 +408,58 @@ describe('serializeContext()', () => {
     assert.ok(result.includes('450.5'), 'debe incluir precio SPY');
   });
 
-  test('con eventos GDELT los incluye en el contexto', () => {
-    const events: GdeltEvent[] = [
+  test('con eventos EventRow multi-fuente incluye el bloque de riesgo global', () => {
+    const events: EventRow[] = [
       {
         source: 'gdelt',
-        event_id: 'evt-001',
+        sourceEventId: 'g-001',
+        eventType: 'conflict',
         category: 'conflict',
-        severity: 0.75,
-        lat: 40.4,
-        lon: -3.7,
-        captured_at: NOW,
+        severity: 65,
+        lat: 33.9,
+        lon: 35.5,
+        country: 'LB',
+        title: 'Armed conflict',
+        url: null,
+        occurredAt: NOW - 3600_000,
+        capturedAt: NOW - 3000_000,
+        rawJson: null,
+      },
+      {
+        source: 'usgs',
+        sourceEventId: 'usgs-q2',
+        eventType: 'earthquake',
+        category: 'natural',
+        severity: 78,
+        lat: 35.0,
+        lon: 139.0,
+        country: 'JP',
+        title: 'M 6.1 Honshu',
+        url: null,
+        occurredAt: NOW - 7200_000,
+        capturedAt: NOW - 6000_000,
+        rawJson: null,
       },
     ];
     const result = serializeContext([], events);
-    assert.ok(result.includes('evt-001'), 'debe incluir event_id');
-    assert.ok(result.includes('conflict'), 'debe incluir categoría');
-    assert.ok(result.includes('0.75'), 'debe incluir severidad');
+    assert.ok(result.includes('conflict'), 'debe incluir tipo conflict (GDELT)');
+    assert.ok(result.includes('earthquake'), 'debe incluir tipo earthquake (USGS)');
+    assert.ok(result.includes('LB'), 'debe incluir país LB');
+    assert.ok(result.includes('JP'), 'debe incluir país JP');
+    assert.ok(result.includes('65') || result.includes('78'), 'debe incluir severity');
+    assert.ok(result.includes('Riesgo global'), 'debe incluir encabezado del bloque de riesgo');
   });
 
-  test('limita eventos GDELT a 10 entradas', () => {
-    const events: GdeltEvent[] = Array.from({ length: 15 }, (_, i) => ({
-      source: 'gdelt',
-      event_id: `evt-${String(i).padStart(3, '0')}`,
-      category: 'political',
-      severity: 0.5,
-      lat: null,
-      lon: null,
-      captured_at: NOW,
-    }));
-    const result = serializeContext([], events);
-    // evt-010 y siguientes NO deben aparecer (solo primeros 10)
-    assert.ok(!result.includes('evt-010'), 'debe limitar a 10 eventos');
-    assert.ok(result.includes('evt-009'), 'debe incluir hasta evt-009');
+  test('sin eventos muestra mensaje de sin eventos recientes', () => {
+    const result = serializeContext([], []);
+    assert.ok(
+      result.includes('sin eventos') || result.includes('sin datos'),
+      'debe indicar ausencia de eventos',
+    );
   });
 });
 
-// ─── Suite 4: buildBriefingPrompt() ───────────────────────────────────────────
+// ─── Suite 5: buildBriefingPrompt() ───────────────────────────────────────────
 
 describe('buildBriefingPrompt()', () => {
   test('incluye la persona y las tres secciones', () => {
@@ -283,7 +477,7 @@ describe('buildBriefingPrompt()', () => {
   });
 });
 
-// ─── Suite 5: generateDailyBriefing() — caché válida NO llama a OpenAI ────────
+// ─── Suite 6: generateDailyBriefing() con DB :memory: ────────────────────────
 
 describe('generateDailyBriefing()', () => {
   beforeEach(async () => {
@@ -299,7 +493,7 @@ describe('generateDailyBriefing()', () => {
   });
 
   test(
-    'con caché válida NO llama a OpenAI (mock que cuenta llamadas)',
+    'con caché válida NO llama al proveedor LLM — D-106 preservado (mock)',
     withEnv({ OPENAI_API_KEY: undefined, ANTHROPIC_API_KEY: undefined }, async () => {
       // Guardamos un briefing válido en la DB (valid_until = now + 1h)
       const validBriefing: Briefing = {
@@ -311,9 +505,8 @@ describe('generateDailyBriefing()', () => {
       };
       await saveBriefing(validBriefing);
 
-      // Sin OPENAI_API_KEY: si generateDailyBriefing llama a OpenAI, lanzaría error.
-      // Si NO lanza y devuelve el briefing cacheado, la prueba pasa.
-      // Esto verifica implícitamente que NO se llamó a OpenAI (D-106 caché 24h).
+      // Sin API keys: si generateDailyBriefing llamara al proveedor, lanzaría error.
+      // Si NO lanza y devuelve el briefing cacheado, verifica D-106 (caché 24h).
       const result = await generateDailyBriefing();
 
       assert.equal(result.domain, 'finance', 'debe devolver el briefing del dominio finance');
@@ -367,13 +560,13 @@ describe('generateDailyBriefing()', () => {
   );
 
   test(
-    'generateDailyBriefing() consulta eventos GDELT del store (D-105)',
+    'generateDailyBriefing() consulta getEvents del store — tabla events (T-14, D-105)',
     withEnv({
       OPENAI_API_KEY: undefined,
       ANTHROPIC_API_KEY: undefined,
       GROQ_API_KEY: undefined,
     }, async () => {
-      // Insertar un market snapshot y un evento GDELT en la DB
+      // Insertar snapshots de mercado y eventos globales multi-fuente en la DB
       await insertMarketSnapshots([
         {
           source: 'yahoo',
@@ -384,33 +577,61 @@ describe('generateDailyBriefing()', () => {
           captured_at: NOW - 1000,
         },
       ]);
-      await insertGdeltEvents([
+
+      // Eventos de la tabla events unificada: GDELT conflict + USGS earthquake
+      await upsertEvents([
         {
           source: 'gdelt',
-          event_id: 'evt-gdelt-d105',
+          sourceEventId: 'evt-gdelt-t14',
+          eventType: 'conflict',
           category: 'conflict',
-          severity: 0.82,
-          lat: 48.85,
-          lon: 2.35,
-          captured_at: NOW - 2000,
+          severity: 62,
+          lat: 33.9,
+          lon: 35.5,
+          country: 'LB',
+          title: 'Armed conflict Lebanon',
+          url: null,
+          occurredAt: NOW - 3600_000,
+          capturedAt: NOW - 1000,
+          rawJson: null,
+        },
+        {
+          source: 'usgs',
+          sourceEventId: 'evt-usgs-t14',
+          eventType: 'earthquake',
+          category: 'natural',
+          severity: 75,
+          lat: 35.0,
+          lon: 139.0,
+          country: 'JP',
+          title: 'M 6.0 Honshu',
+          url: null,
+          occurredAt: NOW - 7200_000,
+          capturedAt: NOW - 1000,
+          rawJson: null,
         },
       ]);
 
-      // Verificar que getRecentGdeltEvents devuelve el evento insertado
-      const { getRecentGdeltEvents: fetchRecent } = await import('@www/store');
-      const events = await fetchRecent(NOW - 60 * 60 * 1000); // última hora
-      assert.equal(events.length, 1, 'debe haber 1 evento GDELT en la DB');
-      assert.equal(events[0]?.event_id, 'evt-gdelt-d105', 'debe ser el evento insertado');
+      // Verificar que getEvents devuelve los eventos insertados
+      const { getEvents } = await import('@www/store');
+      const events = await getEvents({ sinceMs: NOW - 60 * 60 * 1000 });
+      assert.equal(events.length, 2, 'debe haber 2 eventos en la DB');
 
-      // Verificar que serializeContext incluye el evento GDELT en el contexto del briefing
+      const evtIds = events.map((e) => e.sourceEventId);
+      assert.ok(evtIds.includes('evt-gdelt-t14'), 'debe contener el evento GDELT');
+      assert.ok(evtIds.includes('evt-usgs-t14'), 'debe contener el evento USGS');
+
+      // Verificar que serializeContext incluye el bloque de riesgo global
       const { getLatestMarkets: fetchMarkets } = await import('@www/store');
       const markets = await fetchMarkets();
       const ctx = serializeContext(markets, events);
 
-      assert.ok(ctx.includes('evt-gdelt-d105'), 'contexto debe incluir event_id GDELT');
-      assert.ok(ctx.includes('conflict'), 'contexto debe incluir categoría GDELT');
-      assert.ok(ctx.includes('0.82'), 'contexto debe incluir severidad GDELT');
-      assert.ok(ctx.includes('SPY'), 'contexto debe incluir datos de mercado junto con GDELT');
+      assert.ok(ctx.includes('conflict'), 'contexto debe incluir tipo conflict (GDELT)');
+      assert.ok(ctx.includes('earthquake'), 'contexto debe incluir tipo earthquake (USGS)');
+      assert.ok(ctx.includes('LB'), 'contexto debe incluir país LB');
+      assert.ok(ctx.includes('JP'), 'contexto debe incluir país JP');
+      assert.ok(ctx.includes('SPY'), 'contexto debe incluir datos de mercado');
+      assert.ok(ctx.includes('Riesgo global'), 'contexto debe incluir encabezado de riesgo global');
 
       // Sin proveedor LLM, generateDailyBriefing() degrada — pero la consulta al store se completó
       const result = await generateDailyBriefing();

@@ -2,26 +2,74 @@
 // Pipeline de briefing diario financiero (D-105, D-106)
 //
 // Flujo:
-//   1. getCachedBriefing() — si existe y no expiró, lo devuelve (NO llama Anthropic).
-//   2. serializeContext() — lee getLatestMarkets() y GDELT events del store (nunca upstream).
-//   3. complete() via router — llama al proveedor activo (rama claude en MVP).
+//   1. getCachedBriefing() — si existe y no expiró, lo devuelve (NO llama al proveedor LLM).
+//   2. serializeContext() — lee getLatestMarkets() y getEvents() del store (nunca upstream).
+//   3. complete() via router — llama al proveedor activo (rama openai en MVP).
 //   4. saveBriefing() — persiste con valid_until = now + 24h.
 //
-// Degradación (R-2): si Anthropic no responde, sirve el último cacheado o
+// Degradación (R-2): si el proveedor LLM no responde, sirve el último cacheado o
 // devuelve un Briefing con estado "briefing no disponible".
+//
+// T-14: serializeContext acepta EventRow[] (tabla events unificada, todas las fuentes
+// incl. GDELT raw CSV). Reemplaza el bloque GDELT-financiero legacy que leía GdeltEvent[].
+// generateDailyBriefing alimenta el contexto vía getEvents({sinceMs, minSeverity, limit})
+// en vez de getRecentGdeltEvents. Contrato D-106 (caché 24h) y degradación R-2 intactos.
 
 import {
   getCachedBriefing,
   saveBriefing,
   getLatestMarkets,
-  getRecentGdeltEvents,
+  getEvents,
   migrate,
   type MarketSnapshot,
-  type GdeltEvent,
+  type EventRow,
+  type EventFilter,
   type Briefing,
 } from '@www/store';
 import { complete, pickProvider } from './router.js';
 import { buildBriefingPrompt } from './persona.js';
+
+// ─── Global risk context (T-14) ──────────────────────────────────────────────
+
+/**
+ * Construye un bloque de texto con los top-N eventos globales ordenados por
+ * severity descendente (desempate: occurred_at / capturedAt DESC).
+ *
+ * Formato por línea:
+ *   - [event_type] [country|—] sev=[severity] @ [occurred_at ISO | capturedAt ISO]
+ *
+ * Metodología: se seleccionan hasta TOP_N eventos; la función recibe la lista
+ * ya filtrada por sinceMs/minSeverity desde el caller (generateDailyBriefing).
+ * Severidad en escala 0-100 (D-103/T-09), redondeada a entero para compacidad.
+ *
+ * @returns '' si la lista está vacía (el bloque se omite en serializeContext).
+ */
+const TOP_N = 10;
+
+export function buildGlobalRiskContext(events: EventRow[]): string {
+  if (events.length === 0) return '';
+
+  // Ordena por severity desc, luego por temporalidad desc como desempate
+  const sorted = [...events].sort((a, b) => {
+    const sevDiff = (b.severity ?? 0) - (a.severity ?? 0);
+    if (sevDiff !== 0) return sevDiff;
+    const aTs = a.occurredAt ?? a.capturedAt;
+    const bTs = b.occurredAt ?? b.capturedAt;
+    return bTs - aTs;
+  });
+
+  const top = sorted.slice(0, TOP_N);
+  const lines = top.map((e) => {
+    const sev = e.severity != null ? e.severity.toFixed(0) : 'n/d';
+    const country = e.country ?? '—';
+    const ts = e.occurredAt != null
+      ? new Date(e.occurredAt).toISOString()
+      : new Date(e.capturedAt).toISOString();
+    return `  - [${e.eventType}] ${country} sev=${sev} @ ${ts}`;
+  });
+
+  return [`Riesgo global (top ${top.length} eventos, todas las fuentes):`, ...lines].join('\n');
+}
 
 // ─── Context serialization ────────────────────────────────────────────────────
 
@@ -29,10 +77,14 @@ import { buildBriefingPrompt } from './persona.js';
  * Serializa los datos del store a texto denso y eficiente en tokens.
  * Lee SÓLO de la base de datos local (D-105: nunca de upstream directo).
  *
- * @param latest - snapshots de mercado más recientes (de getLatestMarkets)
- * @param events - eventos GDELT recientes (de insertGdeltEvents / query externa)
+ * T-14: el segundo argumento pasa de GdeltEvent[] a EventRow[] — la tabla events
+ * unificada cubre todas las fuentes (GDELT conflict, USGS earthquake, EONET natural).
+ * El bloque GDELT-financiero legacy se reemplaza por buildGlobalRiskContext(events).
+ *
+ * @param latest  - snapshots de mercado más recientes (de getLatestMarkets)
+ * @param events  - eventos globales recientes de la tabla events (de getEvents)
  */
-export function serializeContext(latest: MarketSnapshot[], events: GdeltEvent[]): string {
+export function serializeContext(latest: MarketSnapshot[], events: EventRow[]): string {
   const now = new Date().toISOString();
   const lines: string[] = [`Fecha de generación: ${now}`];
 
@@ -48,19 +100,12 @@ export function serializeContext(latest: MarketSnapshot[], events: GdeltEvent[])
     }
   }
 
-  // Eventos GDELT
-  if (events.length === 0) {
-    lines.push('Eventos geopolíticos GDELT: sin datos recientes.');
+  // Riesgo global (eventos unificados — reemplaza bloque GDELT-financiero legacy)
+  const riskBlock = buildGlobalRiskContext(events);
+  if (riskBlock !== '') {
+    lines.push(riskBlock);
   } else {
-    lines.push(`Eventos geopolíticos GDELT (${events.length} recientes):`);
-    // Limitamos a 10 eventos para no saturar el contexto
-    const top = events.slice(0, 10);
-    for (const e of top) {
-      const sevStr = e.severity != null ? ` [severidad: ${e.severity.toFixed(2)}]` : '';
-      const catStr = e.category ? ` [${e.category}]` : '';
-      const loc = e.lat != null && e.lon != null ? ` (lat:${e.lat.toFixed(2)},lon:${e.lon.toFixed(2)})` : '';
-      lines.push(`  - ${e.event_id}${catStr}${sevStr}${loc}`);
-    }
+    lines.push('Riesgo global: sin eventos recientes en la base de datos local.');
   }
 
   return lines.join('\n');
@@ -72,16 +117,26 @@ const DOMAIN = 'finance';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 horas (D-106)
 const FALLBACK_MODEL = 'cache-fallback';
 
+// Filtro de eventos para el contexto del briefing: últimas 48h, severity mínima 20
+const EVENTS_FILTER: EventFilter = {
+  sinceMs: 0, // se calcula dinámicamente en generateDailyBriefing
+  minSeverity: 20,
+  limit: 50,
+};
+
 /**
- * Genera (o sirve desde caché) el briefing financiero diario.
+ * Genera (o sirve desde caché) el briefing financiero-global diario.
  *
  * Contrato D-106:
- *   - Primero getCachedBriefing(); si válido → devuelve sin llamar a Anthropic.
+ *   - Primero getCachedBriefing(); si válido → devuelve sin llamar al proveedor LLM.
  *   - Si expirado → genera → guarda con valid_until = now + 24h.
  *
  * Degradación R-2:
  *   - Si el proveedor LLM falla, intenta servir el último cacheado (aunque esté expirado).
  *   - Si tampoco hay caché → devuelve Briefing con body_md "briefing no disponible".
+ *
+ * T-14: alimenta el contexto vía getEvents({sinceMs: now-48h, minSeverity:20, limit:50})
+ * en vez de getRecentGdeltEvents. Sin cambios de proveedor (ADR-009) ni llamadas extra.
  */
 export async function generateDailyBriefing(): Promise<Briefing> {
   // Aseguramos que el schema existe (idempotente)
@@ -89,7 +144,7 @@ export async function generateDailyBriefing(): Promise<Briefing> {
 
   const now = Date.now();
 
-  // 1. Intento de caché (D-106: NO llamar a Anthropic si hay caché válida)
+  // 1. Intento de caché (D-106: NO llamar al proveedor LLM si hay caché válida)
   const cached = await getCachedBriefing(DOMAIN, now);
   if (cached !== null) {
     return cached;
@@ -97,16 +152,19 @@ export async function generateDailyBriefing(): Promise<Briefing> {
 
   // 2. Sin caché válida: leer contexto del store
   let latest: MarketSnapshot[] = [];
-  let events: GdeltEvent[] = [];
+  let events: EventRow[] = [];
 
   try {
     latest = await getLatestMarkets();
-    // Eventos GDELT de las últimas 24h almacenados en la DB local.
-    // El conector GDELT (T-03b) popula la tabla independientemente;
+    // Eventos globales de todas las fuentes (GDELT, USGS, EONET) de las últimas 48h.
+    // El scheduler (T-11) popula la tabla `events` independientemente;
     // aquí leemos lo que ya esté persistido (D-105: nunca upstream directo).
-    events = await getRecentGdeltEvents(now - 24 * 60 * 60 * 1000);
+    events = await getEvents({
+      ...EVENTS_FILTER,
+      sinceMs: now - 48 * 60 * 60 * 1000, // 48h
+    });
   } catch {
-    // Si el store falla, intentamos degradar con contexto vacío
+    // Si el store falla, degradamos con contexto vacío
     latest = [];
     events = [];
   }
