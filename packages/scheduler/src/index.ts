@@ -1,5 +1,6 @@
 // packages/scheduler/src/index.ts
 // @www/scheduler — T-11 implementation (Wave C, Fase 2 global-events)
+//                  T-18: gkg job (medium tier) — signals pipeline
 //
 // ADR-004/D-003: scheduler server-side; fetch connector → persist in store BEFORE serving.
 // D-105: 4 tiers by volatility. Intervals are CONFIGURABLE (passed via cfg / Job.intervalMs),
@@ -10,15 +11,24 @@
 //   - defaultJobs: replaces gdelt-financial job (insertGdeltEvents) with gdelt-events job
 //     (upsertEvents); adds usgs (fast) + eonet (medium) jobs.
 //   - Return order: [markets, usgs, eonet, gdelt, news, daily].
+// T-18 changes:
+//   - SchedulerDeps: adds fetchGkg (SignalRow) + upsertSignals.
+//   - ConnectorDeps: adds 'fetchGkg'.
+//   - REAL_STORE_AI_DEPS: adds upsertSignals.
+//   - loadDefaultConnectors: adds fetchGkg.
+//   - defaultJobs: adds gkg (medium) job after gdelt.
+//   - Return order: [markets, usgs, eonet, gdelt, gkg, news, daily].
 
 import {
   insertMarketSnapshots,
   insertNewsItems,
   upsertEvents,
+  upsertSignals,
   purgeAndDownsample,
   type MarketSnapshot,
   type NewsItem,
   type EventRow,
+  type SignalRow,
 } from '@www/store';
 
 import { generateDailyBriefing } from '@www/core-ai';
@@ -140,6 +150,7 @@ const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
  * T-11: SchedulerDeps now carries the three geo-event connectors (all returning
  * ConnectorResult<EventRow>) and upsertEvents from @www/store.
  * insertGdeltEvents is removed — gdelt_events table was DROPped in migration 002.
+ * T-18: adds fetchGkg (ConnectorResult<SignalRow>) + upsertSignals.
  */
 export interface SchedulerDeps {
   // Connector fetchers
@@ -147,11 +158,13 @@ export interface SchedulerDeps {
   fetchUsgs:    () => Promise<ConnectorResult<EventRow>>;
   fetchEonet:   () => Promise<ConnectorResult<EventRow>>;
   fetchGdelt:   () => Promise<ConnectorResult<EventRow>>;
+  fetchGkg:     () => Promise<ConnectorResult<SignalRow>>;
   fetchNews:    () => Promise<ConnectorResult<NewsItem>>;
 
   // Store writes (@www/store) — defaults to real implementations
   insertMarketSnapshots: (rows: MarketSnapshot[]) => Promise<void>;
   upsertEvents:          (rows: EventRow[])        => Promise<void>;
+  upsertSignals:         (rows: SignalRow[])        => Promise<void>;
   insertNewsItems:       (rows: NewsItem[])         => Promise<void>;
   purgeAndDownsample:    (beforeMs: number)         => Promise<void>;
 
@@ -162,23 +175,26 @@ export interface SchedulerDeps {
 // ConnectorDeps type alias (backwards compat — server.ts uses SchedulerDeps directly)
 export type ConnectorDeps = Pick<
   SchedulerDeps,
-  'fetchMarkets' | 'fetchUsgs' | 'fetchEonet' | 'fetchGdelt' | 'fetchNews'
+  'fetchMarkets' | 'fetchUsgs' | 'fetchEonet' | 'fetchGdelt' | 'fetchGkg' | 'fetchNews'
 >;
 
 /**
  * Real (production) implementations of store + ai deps.
  * insertGdeltEvents intentionally omitted — no longer in SchedulerDeps (T-11).
+ * T-18: upsertSignals added.
  */
 const REAL_STORE_AI_DEPS: Pick<
   SchedulerDeps,
   | 'insertMarketSnapshots'
   | 'upsertEvents'
+  | 'upsertSignals'
   | 'insertNewsItems'
   | 'purgeAndDownsample'
   | 'generateDailyBriefing'
 > = {
   insertMarketSnapshots,
   upsertEvents,
+  upsertSignals,
   insertNewsItems,
   purgeAndDownsample,
   generateDailyBriefing,
@@ -197,6 +213,7 @@ async function loadDefaultConnectors(): Promise<ConnectorDeps> {
     fetchUsgs:    mod.fetchUsgs    as ConnectorDeps['fetchUsgs'],
     fetchEonet:   mod.fetchEonet   as ConnectorDeps['fetchEonet'],
     fetchGdelt:   mod.fetchGdelt   as ConnectorDeps['fetchGdelt'],
+    fetchGkg:     mod.fetchGkg     as ConnectorDeps['fetchGkg'],
     fetchNews:    mod.fetchNews    as ConnectorDeps['fetchNews'],
   };
 }
@@ -205,11 +222,13 @@ async function loadDefaultConnectors(): Promise<ConnectorDeps> {
 
 /**
  * Builds the production jobs:
- *   markets (fast) · usgs (fast) · eonet (medium) · gdelt (medium) · news (slow) · daily
+ *   markets (fast) · usgs (fast) · eonet (medium) · gdelt (medium) · gkg (medium) · news (slow) · daily
  *
  * T-11: gdelt-financial job (insertGdeltEvents → gdelt_events) REPLACED by gdelt-events
  * job (upsertEvents → events). usgs + eonet jobs ADDED. Order: [markets, usgs, eonet,
  * gdelt, news, daily]. Mantiene la firma defaultJobs(cfg?, deps?): Job[] que usa server.ts.
+ * T-18: gkg job (medium tier, upsertSignals) ADDED after gdelt.
+ * Order: [markets, usgs, eonet, gdelt, gkg, news, daily].
  *
  * @param cfg  - override any tier's interval in ms.
  * @param deps - inject mocks for testing (optional; defaults load from @www/connectors + real store/ai).
@@ -319,6 +338,29 @@ export function defaultJobs(
     },
   };
 
+  // ── gkg job (medium tier) — T-18: GKG signals pipeline ───────────────────
+  // D-204: tier medium (same as gdelt). Persists SignalRow[] via upsertSignals.
+  // ADR-004: persist BEFORE serving.
+  const gkgJob: Job = {
+    name: 'gkg',
+    tier: 'medium',
+    intervalMs: intervals.medium,
+    async run() {
+      const connectors = deps?.fetchGkg
+        ? { fetchGkg: deps.fetchGkg }
+        : await loadDefaultConnectors();
+      const result = await connectors.fetchGkg();
+      if (result.data.length > 0) {
+        await storeAi.upsertSignals(result.data);
+        console.log(
+          `[scheduler] gkg: persisted ${result.data.length} signals (stale=${result.stale})`,
+        );
+      } else {
+        console.warn('[scheduler] gkg: connector returned empty data — skipping upsert');
+      }
+    },
+  };
+
   // ── news job (slow tier) ──────────────────────────────────────────────────
   const newsJob: Job = {
     name: 'news',
@@ -367,5 +409,6 @@ export function defaultJobs(
   };
 
   // T-11 order: markets · usgs · eonet · gdelt · news · daily
-  return [marketsJob, usgsJob, eonetJob, gdeltJob, newsJob, dailyJob];
+  // T-18 order: markets · usgs · eonet · gdelt · gkg · news · daily
+  return [marketsJob, usgsJob, eonetJob, gdeltJob, gkgJob, newsJob, dailyJob];
 }

@@ -45,9 +45,10 @@ function restoreFetch(): void {
 import {
   fetchGdelt,
   parseLastupdateTxt,
-  extractZipFirstEntry,
   parseGdeltCsvRows,
 } from "./gdelt.js";
+// extractZipFirstEntry se extrajo a ./zip.ts (T-17 refactor) y se reusa en gkg.ts.
+import { extractZipFirstEntry } from "./zip.js";
 
 // ─── Fixture CSV (TAB-separated, 61 columnas, sin header) ─────────────────────
 //

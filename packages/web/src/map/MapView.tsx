@@ -14,8 +14,8 @@
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
-import { LAYERS, LAYER_SOURCES } from './layers.config';
-import { getEvents, type GlobalEvent } from '../api/client';
+import { LAYERS, SIGNAL_LAYERS, LAYER_SOURCES } from './layers.config';
+import { getEvents, getSignals, type GlobalEvent, type RadarSignal } from '../api/client';
 
 interface Props {
   activeLayers: Set<string>;
@@ -43,6 +43,44 @@ function eventsToGeoJSON(events: GlobalEvent[]): GeoJSON.FeatureCollection {
       },
     })),
   };
+}
+
+/**
+ * Convert RadarSignal array to GeoJSON for the 'signals' source.
+ *
+ * W-3 HAZARD FIX: RadarSignal.sections is an ARRAY on the wire. MapLibre
+ * ['get','section'] cannot index arrays. We EXPAND: one Feature per
+ * (signal × section) with `section` as a SCALAR property.
+ *
+ * Signals without lat/lon are silently dropped (cannot be plotted).
+ * toneMag = Math.abs(tone ?? 0) so the paint opacity/radius expressions work.
+ */
+function signalsToGeoJSON(signals: RadarSignal[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const sig of signals) {
+    if (sig.lat == null || sig.lon == null) continue; // no coords — panel only
+    const toneMag = Math.abs(sig.tone ?? 0);
+    for (const { section } of sig.sections) {
+      features.push({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [sig.lon, sig.lat],
+        },
+        properties: {
+          key: sig.key,
+          section,             // SCALAR — required for filterExpr in SIGNAL_LAYERS
+          tone: sig.tone,
+          toneMag,
+          title: sig.title,
+          country: sig.country ?? '',
+          source: sig.source,
+          occurred_at: sig.occurredAt ?? '',
+        },
+      });
+    }
+  }
+  return { type: 'FeatureCollection', features };
 }
 
 /** Empty GeoJSON for initial source registration */
@@ -112,8 +150,8 @@ export default function MapView({ activeLayers }: Props) {
         }
       }
 
-      // Add all layers by iterating LAYERS — NEVER add layers outside this loop
-      for (const spec of LAYERS) {
+      // Add all layers by iterating LAYERS + SIGNAL_LAYERS — NEVER add layers outside this loop
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS]) {
         if (map.getLayer(spec.id)) continue;
 
         // Build a plain object and cast to LayerSpecification at the call site.
@@ -158,7 +196,7 @@ export default function MapView({ activeLayers }: Props) {
 
     const apply = () => {
       if (!mapReadyRef.current) return;
-      for (const spec of LAYERS) {
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS]) {
         if (!map.getLayer(spec.id)) continue;
         const visible = spec.visibleWhen(activeLayers);
         map.setLayoutProperty(spec.id, 'visibility', visible ? 'visible' : 'none');
@@ -203,6 +241,46 @@ export default function MapView({ activeLayers }: Props) {
       } catch {
         // Graceful: upstream failure leaves source as empty GeoJSON (no crash).
         // The panel shows an error state independently via its own fetch.
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load signals data from /api/signals and inject into the 'signals' source (T-20).
+  // One useEffect per data type — mirrors the events pattern above.
+  // W-3: signalsToGeoJSON expands signals×sections so each feature has scalar `section`.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const signals = await getSignals();
+        if (cancelled) return;
+
+        const injectData = () => {
+          if (!map || !mapReadyRef.current) return;
+          const source = map.getSource('signals') as GeoJSONSource | undefined;
+          if (source) {
+            source.setData(signalsToGeoJSON(signals));
+          }
+        };
+
+        if (mapReadyRef.current) {
+          injectData();
+        } else {
+          map.once('load', injectData);
+        }
+      } catch {
+        // Graceful: upstream failure leaves source as empty GeoJSON (no crash).
+        // RadarPanel shows its own error state independently via its own fetch.
       }
     };
 

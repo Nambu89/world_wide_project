@@ -307,8 +307,131 @@ export const LAYERS: LayerSpec[] = [
   },
 ];
 
-/** All unique source ids needed by LAYERS */
-export const LAYER_SOURCES = [...new Set(LAYERS.map((l) => l.source))];
+// ---------------------------------------------------------------------------
+// SIGNAL_LAYERS — radar geoeconomic sections (T-20 / D-207 / D-006)
+//
+// One layer per section with source:'signals'. political_instability is EXCLUDED
+// because it reuses evt-conflict/evt-protest from the 'events' source (per spec).
+//
+// W-3 HAZARD: MapLibre ['get','section'] cannot index arrays. MapView MUST emit
+// one GeoJSON Feature per (signal × section) with `section` as a scalar property.
+//
+// Opacity is driven by |tone| (0..max ~10): brighter = more negative tone.
+// ---------------------------------------------------------------------------
 
-/** All unique toggle keys */
-export const TOGGLE_KEYS = [...new Set(LAYERS.map((l) => l.toggleKey))];
+/** Section filter expression for the 'signals' source (W-3: scalar property) */
+const sectionFilter = (section: string): unknown[] => [
+  '==',
+  ['get', 'section'],
+  section,
+];
+
+/**
+ * Circle paint for signal layers.
+ * Color = accent family per domain. Radius driven by |tone| (0..10 → 4..12px).
+ * Opacity modulated by |tone| so neutral signals fade gently.
+ */
+const signalCirclePaint = (colorHex: string, colorHexHigh: string) => ({
+  'circle-radius': [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    2, ['interpolate', ['linear'], ['get', 'toneMag'], 0, 2, 10, 5],
+    10, ['interpolate', ['linear'], ['get', 'toneMag'], 0, 4, 10, 12],
+  ],
+  'circle-color': [
+    'interpolate',
+    ['linear'],
+    ['get', 'toneMag'],
+    0,  colorHex,
+    10, colorHexHigh,
+  ],
+  'circle-opacity': [
+    'interpolate',
+    ['linear'],
+    ['get', 'toneMag'],
+    0,   0.35,
+    3,   0.65,
+    10,  0.90,
+  ],
+  'circle-stroke-width': 1,
+  'circle-stroke-color': 'rgba(255,255,255,0.15)',
+});
+
+export const SIGNAL_LAYERS: LayerSpec[] = [
+  // =====================================================================
+  // COMMODITIES & ENERGY — amber/orange (energy signature)
+  // =====================================================================
+  {
+    id: 'sig-commodities-energy',
+    source: 'signals',
+    type: 'circle',
+    label: 'Commodities & Energy',
+    toggleKey: 'sig-commodities-energy',
+    visibleWhen: (active) => active.has('sig-commodities-energy'),
+    filterExpr: sectionFilter('commodities_energy'),
+    paint: signalCirclePaint('#f59e0b', '#b45309'),
+  },
+
+  // =====================================================================
+  // CRITICAL MINERALS — teal/green (resources)
+  // =====================================================================
+  {
+    id: 'sig-critical-minerals',
+    source: 'signals',
+    type: 'circle',
+    label: 'Critical Minerals',
+    toggleKey: 'sig-critical-minerals',
+    visibleWhen: (active) => active.has('sig-critical-minerals'),
+    filterExpr: sectionFilter('critical_minerals'),
+    paint: signalCirclePaint('#14b8a6', '#0f766e'),
+  },
+
+  // =====================================================================
+  // SEMIS & AI TECH — violet/indigo (tech)
+  // =====================================================================
+  {
+    id: 'sig-semis-ai-tech',
+    source: 'signals',
+    type: 'circle',
+    label: 'Semis & AI Tech',
+    toggleKey: 'sig-semis-ai-tech',
+    visibleWhen: (active) => active.has('sig-semis-ai-tech'),
+    filterExpr: sectionFilter('semis_ai_tech'),
+    paint: signalCirclePaint('#818cf8', '#4f46e5'),
+  },
+
+  // =====================================================================
+  // DIGITAL INFRA & CYBER — cyan/sky (digital)
+  // =====================================================================
+  {
+    id: 'sig-digital-infra-cyber',
+    source: 'signals',
+    type: 'circle',
+    label: 'Digital Infra & Cyber',
+    toggleKey: 'sig-digital-infra-cyber',
+    visibleWhen: (active) => active.has('sig-digital-infra-cyber'),
+    filterExpr: sectionFilter('digital_infra_cyber'),
+    paint: signalCirclePaint('#38bdf8', '#0369a1'),
+  },
+
+  // =====================================================================
+  // TRADE & SANCTIONS — rose/red (sanctions = danger signal)
+  // =====================================================================
+  {
+    id: 'sig-trade-sanctions',
+    source: 'signals',
+    type: 'circle',
+    label: 'Trade & Sanctions',
+    toggleKey: 'sig-trade-sanctions',
+    visibleWhen: (active) => active.has('sig-trade-sanctions'),
+    filterExpr: sectionFilter('trade_sanctions'),
+    paint: signalCirclePaint('#fb7185', '#be123c'),
+  },
+];
+
+/** All unique source ids needed by LAYERS + SIGNAL_LAYERS */
+export const LAYER_SOURCES = [...new Set([...LAYERS, ...SIGNAL_LAYERS].map((l) => l.source))];
+
+/** All unique toggle keys (events + signals) */
+export const TOGGLE_KEYS = [...new Set([...LAYERS, ...SIGNAL_LAYERS].map((l) => l.toggleKey))];

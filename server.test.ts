@@ -16,8 +16,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, upsertEvents, _resetDbForTesting } from '@www/store';
-import type { EventRow } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, _resetDbForTesting } from '@www/store';
+import type { EventRow, SignalRow, SignalTrendPoint } from '@www/store';
 import { createApp } from './server.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -133,6 +133,51 @@ describe('server.ts integration', () => {
       },
     ];
     await upsertEvents(seedEvents);
+
+    // Seed signals for T-19 tests
+    const now2 = Date.now();
+    const seedSignals: SignalRow[] = [
+      {
+        source: 'gkg',
+        signalId: 'gkg-test-001',
+        title: 'Oil prices surge amid supply concerns',
+        url: 'https://example.com/oil-1',
+        tone: -4.5,
+        themes: 'ENV_OIL;ECON_MARKETS',
+        persons: null,
+        organizations: 'OPEC',
+        lat: 25.0,
+        lon: 55.0,
+        country: 'AE',
+        occurredAt: now2 - 3_600_000,
+        capturedAt: now2 - 1000,
+        rawJson: JSON.stringify({ v2tone: '-4.5,2.1,3.0' }),
+        sections: [
+          { section: 'commodities_energy', matchedBy: 'theme' },
+        ],
+      },
+      {
+        source: 'gkg',
+        signalId: 'gkg-test-002',
+        title: 'Semiconductor export controls tightened',
+        url: 'https://example.com/semis-1',
+        tone: -7.2,
+        themes: 'ECON_SEMIS;SANCTIONS',
+        persons: null,
+        organizations: 'NVIDIA;TSMC',
+        lat: 25.0,
+        lon: 121.0,
+        country: 'TW',
+        occurredAt: now2 - 7_200_000,
+        capturedAt: now2 - 500,
+        rawJson: JSON.stringify({ v2tone: '-7.2,1.0,2.5' }),
+        sections: [
+          { section: 'semis_ai_tech', matchedBy: 'keyword' },
+          { section: 'trade_sanctions', matchedBy: 'theme' },
+        ],
+      },
+    ];
+    await upsertSignals(seedSignals);
 
     // Start server on ephemeral port (no scheduler)
     server = createApp({ startScheduler: false });
@@ -409,6 +454,109 @@ describe('server.ts integration', () => {
 
   it('GET /api/briefing still 200 after T-12 routes added', async () => {
     const { status } = await get(server, '/api/briefing');
+    assert.equal(status, 200);
+  });
+
+  // ── /api/signals (T-19) ───────────────────────────────────────────────────
+
+  it('GET /api/signals → 200 with all seeded signals', async () => {
+    const { status, body } = await get(server, '/api/signals');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as SignalRow[];
+    assert.ok(Array.isArray(rows), 'should be an array');
+    assert.ok(rows.length >= 2, 'should return all seeded signals');
+    // camelCase wire (L-1)
+    assert.ok('signalId' in rows[0]!, 'should have signalId (camelCase)');
+    assert.ok('capturedAt' in rows[0]!, 'should have capturedAt (camelCase)');
+    assert.ok(Array.isArray(rows[0]?.sections), 'sections should be an array');
+  });
+
+  it('GET /api/signals?section=commodities_energy → filters by section', async () => {
+    const { status, body } = await get(server, '/api/signals?section=commodities_energy');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as SignalRow[];
+    assert.ok(Array.isArray(rows), 'should be an array');
+    assert.ok(rows.length >= 1, 'should have at least 1 commodities_energy signal');
+    const ids = rows.map((r) => r.signalId);
+    assert.ok(ids.includes('gkg-test-001'), 'gkg-test-001 should be in commodities_energy');
+    assert.ok(!ids.includes('gkg-test-002'), 'gkg-test-002 (semis/sanctions) should NOT appear');
+  });
+
+  it('GET /api/signals?section=semis_ai_tech → filters by section', async () => {
+    const { status, body } = await get(server, '/api/signals?section=semis_ai_tech');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as SignalRow[];
+    assert.ok(Array.isArray(rows));
+    const ids = rows.map((r) => r.signalId);
+    assert.ok(ids.includes('gkg-test-002'), 'gkg-test-002 should be in semis_ai_tech');
+  });
+
+  it('GET /api/signals?minToneMag=6 → filters by |tone| threshold', async () => {
+    // gkg-test-001 tone=-4.5 (|tone|=4.5 < 6) → excluded
+    // gkg-test-002 tone=-7.2 (|tone|=7.2 >= 6) → included
+    const { status, body } = await get(server, '/api/signals?minToneMag=6');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as SignalRow[];
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.length >= 1, 'should have at least 1 high-magnitude signal');
+    const ids = rows.map((r) => r.signalId);
+    assert.ok(ids.includes('gkg-test-002'), 'gkg-test-002 (|tone|=7.2) should pass threshold');
+    assert.ok(!ids.includes('gkg-test-001'), 'gkg-test-001 (|tone|=4.5) should be filtered out');
+  });
+
+  it('GET /api/signals?limit=1 → respects limit', async () => {
+    const { status, body } = await get(server, '/api/signals?limit=1');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as unknown[];
+    assert.ok(Array.isArray(rows));
+    assert.equal(rows.length, 1, 'should return exactly 1 row');
+  });
+
+  it('GET /api/signals?section=nope → 400 invalid section', async () => {
+    const { status, body } = await get(server, '/api/signals?section=nope');
+    assert.equal(status, 400);
+    const json = JSON.parse(body) as { error: string };
+    assert.ok(json.error.includes('section'), 'error message should mention section');
+  });
+
+  // ── /api/signals/trend (T-19) ─────────────────────────────────────────────
+
+  it('GET /api/signals/trend?section=commodities_energy → 200 with SignalTrendPoint[]', async () => {
+    const { status, body } = await get(server, '/api/signals/trend?section=commodities_energy');
+    assert.equal(status, 200);
+    const points = JSON.parse(body) as SignalTrendPoint[];
+    assert.ok(Array.isArray(points), 'should be an array');
+    assert.ok(points.length >= 1, 'should have at least 1 trend bucket');
+    const p = points[0]!;
+    assert.ok(typeof p.bucketMs === 'number', 'bucketMs should be a number');
+    assert.ok(typeof p.volume === 'number', 'volume should be a number');
+    assert.ok(p.avgTone === null || typeof p.avgTone === 'number', 'avgTone should be number|null');
+    assert.ok(p.volume >= 1, 'volume should be >= 1');
+  });
+
+  it('GET /api/signals/trend without section → 400', async () => {
+    const { status, body } = await get(server, '/api/signals/trend');
+    assert.equal(status, 400);
+    const json = JSON.parse(body) as { error: string };
+    assert.ok(json.error.includes('section'), 'error message should mention section');
+  });
+
+  it('GET /api/signals/trend?section=nope → 400 invalid section', async () => {
+    const { status, body } = await get(server, '/api/signals/trend?section=nope');
+    assert.equal(status, 400);
+    const json = JSON.parse(body) as { error: string };
+    assert.ok(json.error.includes('section'), 'error message should mention section');
+  });
+
+  // ── Regression guard: previous endpoints still green after T-19 ───────────
+
+  it('GET /api/health still 200 after T-19 routes added', async () => {
+    const { status } = await get(server, '/api/health');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/events still 200 after T-19 routes added', async () => {
+    const { status } = await get(server, '/api/events');
     assert.equal(status, 200);
   });
 });

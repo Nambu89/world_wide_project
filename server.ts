@@ -17,6 +17,8 @@
  *   GET /api/briefing
  *   GET /api/events/:source/:id   (T-12 — detail; more specific, checked first)
  *   GET /api/events               (T-12 — list with filters)
+ *   GET /api/signals/trend        (T-19 — section trend; more specific, checked first)
+ *   GET /api/signals              (T-19 — list with filters)
  */
 
 import * as http from 'node:http';
@@ -30,8 +32,10 @@ import {
   getCachedBriefing,
   getEvents,
   getEvent,
+  getSignals,
+  getSignalTrend,
 } from '@www/store';
-import type { EventFilter } from '@www/store';
+import type { EventFilter, Section } from '@www/store';
 import { createScheduler, defaultJobs } from '@www/scheduler';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -66,6 +70,19 @@ const RATE_LIMIT_MAX = 120;          // 120 req/min per IP
 
 /** Default sparkline lookback when `since` querystring is absent. */
 const DEFAULT_TREND_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * Valid Section values for /api/signals and /api/signals/trend (T-19).
+ * Must stay in sync with Section type in @www/store/types.ts.
+ */
+const VALID_SECTIONS: Set<Section> = new Set([
+  'political_instability',
+  'commodities_energy',
+  'critical_minerals',
+  'semis_ai_tech',
+  'digital_infra_cyber',
+  'trade_sanctions',
+]);
 
 // ─── Rate-limit store (in-memory) ────────────────────────────────────────────
 
@@ -308,6 +325,80 @@ async function route(
 
     const events = await getEvents(filter);
     sendJson(res, 200, events);
+    return;
+  }
+
+  // ── /api/signals/trend ────────────────────────────────────────────────────
+  // T-19 — SOLO-LECTURA. Checked BEFORE /api/signals (more specific pathname).
+  // section is REQUIRED; since→sinceMs and bucket→bucketMs are optional.
+  // NEVER fires connectors on-request (ADR-004/D-007/D-107).
+  if (pathname === '/api/signals/trend') {
+    const sectionParam = url.searchParams.get('section');
+    if (sectionParam === null || !VALID_SECTIONS.has(sectionParam as Section)) {
+      sendJson(res, 400, {
+        error: 'section is required and must be one of: political_instability, commodities_energy, critical_minerals, semis_ai_tech, digital_infra_cyber, trade_sanctions',
+      });
+      return;
+    }
+    const section = sectionParam as Section;
+
+    const trendOpts: { sinceMs?: number; bucketMs?: number } = {};
+
+    const sinceParam = url.searchParams.get('since');
+    if (sinceParam !== null) {
+      const sinceMs = Number(sinceParam);
+      if (Number.isFinite(sinceMs)) trendOpts.sinceMs = sinceMs;
+    }
+
+    const bucketParam = url.searchParams.get('bucket');
+    if (bucketParam !== null) {
+      const bucketMs = Number(bucketParam);
+      if (Number.isFinite(bucketMs) && bucketMs > 0) trendOpts.bucketMs = bucketMs;
+    }
+
+    const trend = await getSignalTrend(section, trendOpts);
+    sendJson(res, 200, trend);
+    return;
+  }
+
+  // ── /api/signals ──────────────────────────────────────────────────────────
+  // T-19 — SOLO-LECTURA. Parses querystring into getSignals opts.
+  // section: optional; if present and invalid → 400.
+  // NEVER fires connectors on-request (ADR-004/D-007/D-107).
+  if (pathname === '/api/signals') {
+    const signalOpts: { section?: Section; sinceMs?: number; limit?: number; minToneMag?: number } = {};
+
+    const sectionParam = url.searchParams.get('section');
+    if (sectionParam !== null) {
+      if (!VALID_SECTIONS.has(sectionParam as Section)) {
+        sendJson(res, 400, {
+          error: 'section must be one of: political_instability, commodities_energy, critical_minerals, semis_ai_tech, digital_infra_cyber, trade_sanctions',
+        });
+        return;
+      }
+      signalOpts.section = sectionParam as Section;
+    }
+
+    const sinceParam = url.searchParams.get('since');
+    if (sinceParam !== null) {
+      const sinceMs = Number(sinceParam);
+      if (Number.isFinite(sinceMs)) signalOpts.sinceMs = sinceMs;
+    }
+
+    const limitParam = url.searchParams.get('limit');
+    if (limitParam !== null) {
+      const limit = Number(limitParam);
+      if (Number.isFinite(limit) && limit > 0) signalOpts.limit = Math.floor(limit);
+    }
+
+    const minToneMagParam = url.searchParams.get('minToneMag');
+    if (minToneMagParam !== null) {
+      const minToneMag = Number(minToneMagParam);
+      if (Number.isFinite(minToneMag)) signalOpts.minToneMag = minToneMag;
+    }
+
+    const signals = await getSignals(signalOpts);
+    sendJson(res, 200, signals);
     return;
   }
 

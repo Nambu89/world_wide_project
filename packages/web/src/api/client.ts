@@ -9,6 +9,8 @@
  *   /api/gdelt        → RawGdeltEvent[]    (bare array, may be empty)
  *   /api/briefing     → { briefing: RawBriefing | null }
  *   /api/events       → EventRow[]         (T-13 / T-12, bare array)
+ *   /api/signals      → SignalRow[]         (T-20, bare array, camelCase — BUG-1 L-1)
+ *   /api/signals/trend → SignalTrendPoint[] (T-20, bare array)
  */
 
 // ---------------------------------------------------------------------------
@@ -74,6 +76,43 @@ interface RawEventRow {
   occurredAt: number | null;       // epoch ms
   capturedAt: number;              // epoch ms
   rawJson: string | null;          // stringified JSON with source-specific fields
+}
+
+/**
+ * Raw signal row from /api/signals — mirrors SignalRow in @www/store (T-16/T-20).
+ * Typed locally: web NEVER imports @www/store (boundary rule).
+ *
+ * WIRE FORMAT = camelCase. @www/store serializes SignalRow fields directly via
+ * JSON.stringify with NO snake_case transform — same BUG-1 pattern as EventRow.
+ * (L-1 critical: snake_case client here would cause all map layers to show zero
+ * points because section/tone/lat/lon would be undefined at runtime.)
+ */
+interface RawSignalRow {
+  source: string;
+  signalId: string;
+  title: string | null;
+  url: string | null;
+  tone: number | null;           // GDELT GKG GlobalEventTone (negative = bad)
+  themes: string | null;         // pipe-separated list
+  persons: string | null;        // pipe-separated list
+  organizations: string | null;  // pipe-separated list
+  lat: number | null;
+  lon: number | null;
+  country: string | null;
+  occurredAt: number | null;     // epoch ms
+  capturedAt: number;            // epoch ms
+  rawJson: string | null;
+  sections: Array<{ section: string; matchedBy: string }>;
+}
+
+/**
+ * Raw signal trend point from /api/signals/trend.
+ * camelCase — same wire discipline.
+ */
+interface RawSignalTrendPoint {
+  bucketMs: number;
+  volume: number;
+  avgTone: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +192,49 @@ export interface EventsResponse {
   fetchedAt: string;
 }
 
+/**
+ * View-model for a radar signal consumed by RadarPanel + MapView.
+ *
+ * W-3 HAZARD: `sections` is an array on the wire but MapLibre ['get','section']
+ * cannot index arrays. MapView MUST expand: one Feature per (signal × section)
+ * with `section` as a scalar property.
+ *
+ * Signals without lat/lon are kept in the view-model (used by RadarPanel list)
+ * but MUST NOT emit a GeoJSON feature (no coords = cannot be plotted).
+ */
+export interface RadarSignal {
+  /** Unique key: `{source}:{signalId}` */
+  key: string;
+  source: string;
+  signalId: string;
+  title: string;
+  url: string | null;
+  tone: number | null;
+  themes: string[];
+  persons: string[];
+  organizations: string[];
+  lat: number | null;
+  lon: number | null;
+  country: string | null;
+  occurredAt: string | null;    // ISO string or null
+  capturedAt: string;           // ISO string
+  /** Sections this signal matches (may be multiple) */
+  sections: Array<{ section: string; matchedBy: string }>;
+}
+
+export interface SignalTrendPoint {
+  bucketMs: number;
+  volume: number;
+  avgTone: number | null;
+}
+
+export interface SignalFilter {
+  section?: string;
+  since?: number;     // epoch ms
+  limit?: number;
+  minToneMag?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter helpers
 // ---------------------------------------------------------------------------
@@ -204,6 +286,32 @@ function adaptEventRow(e: RawEventRow): GlobalEvent | null {
     url: e.url,
     occurredAt: e.occurredAt != null ? new Date(e.occurredAt).toISOString() : null,
     capturedAt: new Date(e.capturedAt).toISOString(),
+  };
+}
+
+/** Split a pipe-separated nullable string into a clean array. */
+function splitPipe(s: string | null): string[] {
+  if (!s || s.trim() === '') return [];
+  return s.split(';').flatMap((part) => part.split(',')).map((p) => p.trim()).filter(Boolean);
+}
+
+function adaptSignalRow(r: RawSignalRow): RadarSignal {
+  return {
+    key: `${r.source}:${r.signalId}`,
+    source: r.source,
+    signalId: r.signalId,
+    title: r.title ?? r.signalId,
+    url: r.url,
+    tone: r.tone,
+    themes: splitPipe(r.themes),
+    persons: splitPipe(r.persons),
+    organizations: splitPipe(r.organizations),
+    lat: r.lat,
+    lon: r.lon,
+    country: r.country,
+    occurredAt: r.occurredAt != null ? new Date(r.occurredAt).toISOString() : null,
+    capturedAt: new Date(r.capturedAt).toISOString(),
+    sections: Array.isArray(r.sections) ? r.sections : [],
   };
 }
 
@@ -300,4 +408,53 @@ export async function getEvents(filter?: EventFilter): Promise<EventsResponse> {
     events,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Fetch radar signals from /api/signals with optional filters.
+ *
+ * Note: signals WITHOUT lat/lon are included in the result (panel needs them).
+ * MapView discards no-coord rows when building GeoJSON features (W-3).
+ *
+ * Attribution (feedback_data_tos):
+ *   "Source: The GDELT Project (gdeltproject.org)"
+ */
+export async function getSignals(filter?: SignalFilter): Promise<RadarSignal[]> {
+  const params = new URLSearchParams();
+
+  if (filter) {
+    if (filter.section !== undefined) params.set('section', filter.section);
+    if (filter.since !== undefined) params.set('since', String(filter.since));
+    if (filter.limit !== undefined) params.set('limit', String(filter.limit));
+    if (filter.minToneMag !== undefined) params.set('minToneMag', String(filter.minToneMag));
+  }
+
+  const qs = params.toString();
+  const path = qs ? `/api/signals?${qs}` : '/api/signals';
+  const raw = await apiFetch<RawSignalRow[]>(path);
+  if (!Array.isArray(raw)) return [];
+  return raw.map(adaptSignalRow);
+}
+
+/**
+ * Fetch signal trend data for a section from /api/signals/trend.
+ *
+ * @param section  One of the 6 radar section literals.
+ * @param opts     Optional: `since` (epoch ms), `bucket` (ms bucket size).
+ */
+export async function getSignalTrend(
+  section: string,
+  opts?: { since?: number; bucket?: number }
+): Promise<SignalTrendPoint[]> {
+  const params = new URLSearchParams({ section });
+  if (opts?.since !== undefined) params.set('since', String(opts.since));
+  if (opts?.bucket !== undefined) params.set('bucket', String(opts.bucket));
+
+  const raw = await apiFetch<RawSignalTrendPoint[]>(`/api/signals/trend?${params.toString()}`);
+  if (!Array.isArray(raw)) return [];
+  return raw.map((p) => ({
+    bucketMs: p.bucketMs,
+    volume: p.volume,
+    avgTone: p.avgTone,
+  }));
 }

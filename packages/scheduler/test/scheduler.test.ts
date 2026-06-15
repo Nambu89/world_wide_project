@@ -3,6 +3,7 @@
 //
 // T-11: tests updated to cover usgs(fast)/eonet(medium)/gdelt(medium) jobs
 // that persist via upsertEvents; verify insertGdeltEvents is GONE from all paths.
+// T-18: tests updated to cover gkg(medium) job that persists via upsertSignals.
 //
 // Run via:
 //   node --import tsx --test packages/scheduler/test/scheduler.test.ts
@@ -18,7 +19,7 @@ import {
   type ConnectorResult,
 } from '../src/index.js';
 
-import type { MarketSnapshot, NewsItem, Briefing, EventRow } from '@www/store';
+import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section } from '@www/store';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -48,12 +49,37 @@ function makeEventRow(overrides: Partial<EventRow> = {}): EventRow {
 
 // ─── Mock factory ─────────────────────────────────────────────────────────────
 
+// ─── Fixture SignalRow factory ─────────────────────────────────────────────────
+
+function makeSignalRow(overrides: Partial<SignalRow> = {}): SignalRow {
+  return {
+    source:        overrides.source        ?? 'gkg',
+    signalId:      overrides.signalId      ?? 'GKG-001',
+    title:         overrides.title         ?? 'Test signal headline',
+    url:           overrides.url           ?? 'https://gdelt.gdeltproject.org/test',
+    tone:          overrides.tone          ?? -3.5,
+    themes:        overrides.themes        ?? 'ECON_TRADE;ENV_CLIMATE',
+    persons:       overrides.persons       ?? null,
+    organizations: overrides.organizations ?? null,
+    lat:           overrides.lat           ?? 40.4,
+    lon:           overrides.lon           ?? -3.7,
+    country:       overrides.country       ?? 'es',
+    occurredAt:    overrides.occurredAt    ?? Date.now() - 7_200_000,
+    capturedAt:    overrides.capturedAt    ?? Date.now(),
+    rawJson:       overrides.rawJson       ?? '{}',
+    sections:      overrides.sections      ?? [
+      { section: 'trade_sanctions' as Section, matchedBy: 'theme' },
+    ],
+  };
+}
+
 interface MockOptions {
   emptyMarkets?: boolean;
   throwOnMarkets?: boolean;
   emptyUsgs?: boolean;
   emptyEonet?: boolean;
   emptyGdelt?: boolean;
+  emptyGkg?: boolean;
 }
 
 interface TrackingDeps extends SchedulerDeps {
@@ -62,9 +88,11 @@ interface TrackingDeps extends SchedulerDeps {
   fetchUsgsCalled:    number;
   fetchEonetCalled:   number;
   fetchGdeltCalled:   number;
+  fetchGkgCalled:     number;
   fetchNewsCalled:    number;
   insertedMarkets:    MarketSnapshot[];
   upsertedEvents:     EventRow[];
+  upsertedSignals:    SignalRow[];
   insertedNews:       NewsItem[];
   briefingCalled:     number;
   purgeCalled:        number;
@@ -78,9 +106,11 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
     fetchUsgsCalled:    0,
     fetchEonetCalled:   0,
     fetchGdeltCalled:   0,
+    fetchGkgCalled:     0,
     fetchNewsCalled:    0,
     insertedMarkets:    [],
     upsertedEvents:     [],
+    upsertedSignals:    [],
     insertedNews:       [],
     briefingCalled:     0,
     purgeCalled:        0,
@@ -139,6 +169,16 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
       };
     },
 
+    async fetchGkg(): Promise<ConnectorResult<SignalRow>> {
+      tracking.fetchGkgCalled++;
+      if (opts.emptyGkg) return { data: [], stale: false, fetchedAt: Date.now() };
+      return {
+        data:      [makeSignalRow({ source: 'gkg', signalId: 'GKG-001' })],
+        stale:     false,
+        fetchedAt: Date.now(),
+      };
+    },
+
     async fetchNews(): Promise<ConnectorResult<NewsItem>> {
       tracking.fetchNewsCalled++;
       return {
@@ -164,6 +204,10 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
 
     async upsertEvents(rows: EventRow[]): Promise<void> {
       tracking.upsertedEvents.push(...rows);
+    },
+
+    async upsertSignals(rows: SignalRow[]): Promise<void> {
+      tracking.upsertedSignals.push(...rows);
     },
 
     async insertNewsItems(rows: NewsItem[]): Promise<void> {
@@ -379,23 +423,24 @@ describe('createScheduler', () => {
 // ─── Test suite: defaultJobs ──────────────────────────────────────────────────
 
 describe('defaultJobs', () => {
-  // T-11: now 6 jobs (markets/usgs/eonet/gdelt/news/daily)
-  it('returns exactly 6 jobs: markets/usgs/eonet/gdelt/news/daily', () => {
+  // T-11: 6 jobs; T-18: now 7 jobs (markets/usgs/eonet/gdelt/gkg/news/daily)
+  it('returns exactly 7 jobs: markets/usgs/eonet/gdelt/gkg/news/daily', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
-    assert.equal(jobs.length, 6, `Expected 6 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
+    assert.equal(jobs.length, 7, `Expected 7 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
 
     const names = jobs.map((j) => j.name);
     assert.ok(names.includes('markets'), 'should include markets job');
     assert.ok(names.includes('usgs'),    'should include usgs job');
     assert.ok(names.includes('eonet'),   'should include eonet job');
     assert.ok(names.includes('gdelt'),   'should include gdelt job');
+    assert.ok(names.includes('gkg'),     'should include gkg job');
     assert.ok(names.includes('news'),    'should include news job');
     assert.ok(names.includes('daily'),   'should include daily job');
   });
 
-  // T-11: verify tier assignments per D-105
-  it('usgs=fast, eonet=medium, gdelt=medium per D-105', () => {
+  // T-11: verify tier assignments per D-105; T-18: gkg=medium (D-204)
+  it('usgs=fast, eonet=medium, gdelt=medium, gkg=medium per D-105/D-204', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
 
@@ -404,17 +449,19 @@ describe('defaultJobs', () => {
     assert.equal(byName['usgs']?.tier,    'fast',   'usgs must be fast tier (D-105)');
     assert.equal(byName['eonet']?.tier,   'medium', 'eonet must be medium tier (D-105)');
     assert.equal(byName['gdelt']?.tier,   'medium', 'gdelt must be medium tier (D-105)');
+    assert.equal(byName['gkg']?.tier,     'medium', 'gkg must be medium tier (D-204)');
     assert.equal(byName['markets']?.tier, 'fast',   'markets must be fast tier');
     assert.equal(byName['news']?.tier,    'slow',   'news must be slow tier');
     assert.equal(byName['daily']?.tier,   'daily',  'daily must be daily tier');
   });
 
-  // T-11: return order must be [markets, usgs, eonet, gdelt, news, daily]
-  it('job order is [markets, usgs, eonet, gdelt, news, daily]', () => {
+  // T-11: return order was [markets, usgs, eonet, gdelt, news, daily]
+  // T-18: return order is [markets, usgs, eonet, gdelt, gkg, news, daily]
+  it('job order is [markets, usgs, eonet, gdelt, gkg, news, daily]', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
     const order = jobs.map((j) => j.name);
-    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'news', 'daily']);
+    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'news', 'daily']);
   });
 
   it('uses custom intervals from cfg', () => {
@@ -604,6 +651,40 @@ describe('defaultJobs', () => {
     // beforeMs should be approximately (now - 90d) — allow 5s slack
     assert.ok(purgeMs >= before - NINETY_DAYS_MS - 5_000, 'purgeMs not too old');
     assert.ok(purgeMs <= after  - NINETY_DAYS_MS + 5_000, 'purgeMs not in the future');
+  });
+
+  // T-18: gkg job tests
+  it('gkg job: exists with name=gkg and tier=medium', () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+    const gkgJob = jobs.find((j) => j.name === 'gkg');
+    assert.ok(gkgJob, 'gkg job must exist in defaultJobs()');
+    assert.equal(gkgJob.tier, 'medium', 'gkg job must be medium tier (D-204)');
+  });
+
+  it('gkg job: fetchGkg() called → upsertSignals called with SignalRow data', async () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+    const gkgJob = jobs.find((j) => j.name === 'gkg');
+    assert.ok(gkgJob, 'gkg job not found');
+
+    await gkgJob.run();
+
+    assert.equal(deps.fetchGkgCalled,       1, 'fetchGkg called once');
+    assert.equal(deps.upsertedSignals.length, 1, '1 signal upserted via upsertSignals');
+    assert.equal(deps.upsertedSignals[0]?.source,   'gkg');
+    assert.equal(deps.upsertedSignals[0]?.signalId, 'GKG-001');
+  });
+
+  it('gkg job: skips upsert when connector returns empty data', async () => {
+    const deps = makeDeps({ emptyGkg: true });
+    const jobs = defaultJobs(undefined, deps);
+    const gkgJob = jobs.find((j) => j.name === 'gkg')!;
+
+    await gkgJob.run();
+
+    assert.equal(deps.upsertedSignals.length, 0, 'no upsert when gkg returns empty');
+    assert.equal(deps.fetchGkgCalled, 1, 'fetchGkg still called even if empty');
   });
 
   it('a failing daily job inside scheduler does not stop other jobs', async () => {

@@ -6,10 +6,10 @@
 import type { Client as LibsqlClient } from '@libsql/client';
 import { getDb, _resetDbForTesting } from './db.js';
 import { migrate as runMigrations } from './migrate.js';
-import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter } from './types.js';
+import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section } from './types.js';
 
 // Re-export types so consumers don't need a separate import
-export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter } from './types.js';
+export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section } from './types.js';
 
 // ─── DB singleton ────────────────────────────────────────────────────────────
 
@@ -347,6 +347,221 @@ function rowToEventRow(r: Record<string, unknown>): EventRow {
   return base;
 }
 
+// ─── Signals API (T-15, ADR-011) ─────────────────────────────────────────────
+
+/**
+ * UPSERT signals into the `signals` table by (source, signal_id).
+ * On conflict, updates all mutable fields (tone, title, url, themes, persons,
+ * organizations, lat, lon, country, occurred_at, captured_at, raw_json).
+ * Then REWRITES the signal_sections bridge rows for each article:
+ *   DELETE existing sections for this signal + INSERT the new set.
+ * D-202: ensures re-ingested articles reflect updated classification without
+ * duplicating section rows (PRIMARY KEY on signal_id, section guards anyway).
+ */
+export async function upsertSignals(rows: SignalRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const client = getDb();
+
+  for (const row of rows) {
+    // UPSERT the signal row (D-202)
+    await client.execute({
+      sql: `INSERT INTO signals
+              (source, signal_id, title, url, tone, themes, persons, organizations,
+               lat, lon, country, occurred_at, captured_at, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (source, signal_id) DO UPDATE SET
+              title         = excluded.title,
+              url           = excluded.url,
+              tone          = excluded.tone,
+              themes        = excluded.themes,
+              persons       = excluded.persons,
+              organizations = excluded.organizations,
+              lat           = excluded.lat,
+              lon           = excluded.lon,
+              country       = excluded.country,
+              occurred_at   = excluded.occurred_at,
+              captured_at   = excluded.captured_at,
+              raw_json      = excluded.raw_json`,
+      args: [
+        row.source,
+        row.signalId,
+        row.title ?? null,
+        row.url ?? null,
+        row.tone ?? null,
+        row.themes ?? null,
+        row.persons ?? null,
+        row.organizations ?? null,
+        row.lat ?? null,
+        row.lon ?? null,
+        row.country ?? null,
+        row.occurredAt ?? null,
+        row.capturedAt,
+        row.rawJson ?? null,
+      ],
+    });
+
+    // Resolve the autoincrement PK for this signal to write signal_sections.
+    // Always re-query by (source, signal_id) — libSQL sqlite3 may return lastInsertRowid=0
+    // for the ON CONFLICT DO UPDATE branch (behavior varies by driver version), so we
+    // unconditionally SELECT to get the stable PK. The UNIQUE index makes this fast.
+    const idRow = await client.execute({
+      sql: 'SELECT id FROM signals WHERE source = ? AND signal_id = ?',
+      args: [row.source, row.signalId],
+    });
+    const firstIdRow = idRow.rows[0];
+    if (firstIdRow === undefined) continue; // should never happen after a successful UPSERT
+    const signalDbId = Number(firstIdRow['id']);
+
+    // REWRITE signal_sections: delete old, insert new (D-202)
+    await client.execute({
+      sql: 'DELETE FROM signal_sections WHERE signal_id = ?',
+      args: [signalDbId],
+    });
+
+    for (const sec of row.sections) {
+      await client.execute({
+        sql: `INSERT OR IGNORE INTO signal_sections (signal_id, section, matched_by)
+              VALUES (?, ?, ?)`,
+        args: [signalDbId, sec.section, sec.matchedBy],
+      });
+    }
+  }
+}
+
+/**
+ * Returns signals matching the given filter, ordered by captured_at DESC.
+ * section: JOIN with signal_sections to filter by section (uses ix_sigsec_section).
+ * minToneMag: |tone| >= minToneMag (signals with null tone excluded when this is set).
+ * Default limit = 500 (consistent with getEvents).
+ */
+export async function getSignals(opts: {
+  section?: Section;
+  sinceMs?: number;
+  limit?: number;
+  minToneMag?: number;
+}): Promise<SignalRow[]> {
+  const client = getDb();
+
+  const conditions: string[] = [];
+  const args: (string | number | null)[] = [];
+
+  if (opts.section !== undefined) {
+    conditions.push('ss.section = ?');
+    args.push(opts.section);
+  }
+  if (opts.sinceMs !== undefined) {
+    conditions.push('s.captured_at >= ?');
+    args.push(opts.sinceMs);
+  }
+  if (opts.minToneMag !== undefined) {
+    conditions.push('s.tone IS NOT NULL AND ABS(s.tone) >= ?');
+    args.push(opts.minToneMag);
+  }
+
+  const limit = opts.limit ?? 500;
+
+  let sql: string;
+  if (opts.section !== undefined) {
+    // JOIN with signal_sections when filtering by section
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    sql = `SELECT DISTINCT s.*
+           FROM signals s
+           INNER JOIN signal_sections ss ON ss.signal_id = s.id
+           ${where}
+           ORDER BY s.captured_at DESC
+           LIMIT ?`;
+  } else {
+    // No section filter — query signals directly (no join)
+    const nonSectionConditions = conditions.filter((c) => !c.startsWith('ss.'));
+    const where = nonSectionConditions.length > 0 ? `WHERE ${nonSectionConditions.join(' AND ')}` : '';
+    sql = `SELECT * FROM signals s ${where} ORDER BY s.captured_at DESC LIMIT ?`;
+  }
+
+  const result = await client.execute({ sql, args: [...args, limit] });
+
+  // For each signal row, fetch its sections from signal_sections
+  const signals: SignalRow[] = [];
+  for (const r of result.rows) {
+    const dbId = Number(r['id']);
+    const sectResult = await client.execute({
+      sql: 'SELECT section, matched_by FROM signal_sections WHERE signal_id = ?',
+      args: [dbId],
+    });
+    const sections = sectResult.rows.map((sr) => ({
+      section: String(sr['section']) as Section,
+      matchedBy: String(sr['matched_by']) as 'theme' | 'keyword' | 'entity',
+    }));
+
+    signals.push({
+      source: String(r['source']) as SignalRow['source'],
+      signalId: String(r['signal_id']),
+      title: r['title'] != null ? String(r['title']) : null,
+      url: r['url'] != null ? String(r['url']) : null,
+      tone: r['tone'] != null ? Number(r['tone']) : null,
+      themes: r['themes'] != null ? String(r['themes']) : null,
+      persons: r['persons'] != null ? String(r['persons']) : null,
+      organizations: r['organizations'] != null ? String(r['organizations']) : null,
+      lat: r['lat'] != null ? Number(r['lat']) : null,
+      lon: r['lon'] != null ? Number(r['lon']) : null,
+      country: r['country'] != null ? String(r['country']) : null,
+      occurredAt: r['occurred_at'] != null ? Number(r['occurred_at']) : null,
+      capturedAt: Number(r['captured_at']),
+      rawJson: r['raw_json'] != null ? String(r['raw_json']) : null,
+      sections,
+    });
+  }
+
+  return signals;
+}
+
+/**
+ * Returns aggregated trend points for a given section.
+ * Bucketed by bucketMs (default 1 hour = 3_600_000 ms) over captured_at.
+ * volume: count of all signals in that bucket for the section.
+ * avgTone: mean of non-null tone values; null if all tone values in bucket are null.
+ * D-005: {sig.trend} = volumen + AvgTone medio por ventana temporal.
+ */
+export async function getSignalTrend(
+  section: Section,
+  opts: { sinceMs?: number; bucketMs?: number } = {}
+): Promise<SignalTrendPoint[]> {
+  const client = getDb();
+  const bucketMs = opts.bucketMs ?? 3_600_000; // 1 hour default
+
+  const conditions: string[] = ['ss.section = ?'];
+  const args: (string | number)[] = [section];
+
+  if (opts.sinceMs !== undefined) {
+    conditions.push('s.captured_at >= ?');
+    args.push(opts.sinceMs);
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  // Compute bucket floor using explicit INTEGER cast to force integer division in libSQL.
+  // libSQL passes JS numbers as REAL, so without CAST the division would be floating-point
+  // and the bucket floor would be wrong (e.g. 1_000_000 / 3_600_000 = 0.277 not 0).
+  // COUNT(*) for volume (includes null-tone rows); AVG ignores null in SQL natively.
+  const result = await client.execute({
+    sql: `SELECT
+            (CAST(s.captured_at AS INTEGER) / CAST(? AS INTEGER)) * CAST(? AS INTEGER) AS bucket_ms,
+            COUNT(*) AS volume,
+            AVG(s.tone) AS avg_tone
+          FROM signals s
+          INNER JOIN signal_sections ss ON ss.signal_id = s.id
+          ${where}
+          GROUP BY bucket_ms
+          ORDER BY bucket_ms ASC`,
+    args: [bucketMs, bucketMs, ...args],
+  });
+
+  return result.rows.map((r) => ({
+    bucketMs: Number(r['bucket_ms']),
+    volume: Number(r['volume']),
+    avgTone: r['avg_tone'] != null ? Number(r['avg_tone']) : null,
+  }));
+}
+
 // ─── Retention + Downsampling (D-102) ────────────────────────────────────────
 
 /**
@@ -404,6 +619,14 @@ export async function purgeAndDownsample(beforeMs: number): Promise<void> {
   // Step 4 — Purge news_items older than beforeMs
   await client.execute({
     sql: 'DELETE FROM news_items WHERE captured_at < ?',
+    args: [beforeMs],
+  });
+
+  // Step 5 — Purge signals older than beforeMs (T-15, ADR-011).
+  // Use COALESCE(occurred_at, captured_at) for the same reason as events (Step 3).
+  // signal_sections are deleted automatically via ON DELETE CASCADE.
+  await client.execute({
+    sql: 'DELETE FROM signals WHERE COALESCE(occurred_at, captured_at) < ?',
     args: [beforeMs],
   });
 }

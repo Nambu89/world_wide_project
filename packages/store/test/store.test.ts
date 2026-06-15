@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { createClient } from '@libsql/client';
 import type { Client as LibsqlClient } from '@libsql/client';
 import { migrate as runMigrations } from '../src/migrate.js';
+import type { SignalRow } from '../src/index.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,9 @@ import {
   getEvents,
   getEvent,
   getEventsByCountry,
+  upsertSignals,
+  getSignals,
+  getSignalTrend,
 } from '../src/index.js';
 import type { EventRow } from '../src/index.js';
 
@@ -598,5 +602,360 @@ describe("getRecentGdeltEvents() — reads events source='gdelt' (C-3 retro-comp
   it('returns empty array when no gdelt events exist in window', async () => {
     const events = await getRecentGdeltEvents(Date.now() + 1_000_000); // future
     assert.equal(events.length, 0, 'empty when sinceMs is in the future');
+  });
+});
+
+// ─── Suite 12: migrate() — migration 003_signals idempotent ──────────────────
+
+describe('migrate() — migration 003_signals.sql (T-15, HAZARD W-2)', () => {
+  it('creates signals + signal_sections tables and all 4 indices — idempotent 3x', async () => {
+    const client = makeInMemoryClient();
+
+    // Run 3 times — must be idempotent (HAZARD W-2 guard)
+    await runMigrations(client);
+    await runMigrations(client);
+    await runMigrations(client);
+
+    // Assert tables exist via sqlite_master (catches HAZARD W-2: silent discard of CREATE)
+    const tablesResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('signals','signal_sections') ORDER BY name"
+    );
+    const tableNames = tablesResult.rows.map((r) => String(r['name']));
+    assert.ok(tableNames.includes('signals'), 'signals table created');
+    assert.ok(tableNames.includes('signal_sections'), 'signal_sections table created');
+
+    // Assert all 4 indices exist
+    const indicesResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('ix_signals_recent','ix_signals_tone','ix_signals_occ','ix_sigsec_section') ORDER BY name"
+    );
+    const indexNames = indicesResult.rows.map((r) => String(r['name']));
+    assert.ok(indexNames.includes('ix_signals_recent'), 'ix_signals_recent index exists');
+    assert.ok(indexNames.includes('ix_signals_tone'), 'ix_signals_tone index exists');
+    assert.ok(indexNames.includes('ix_signals_occ'), 'ix_signals_occ index exists');
+    assert.ok(indexNames.includes('ix_sigsec_section'), 'ix_sigsec_section index exists');
+
+    // Migration 003 recorded exactly once
+    const mig003 = await client.execute(
+      "SELECT id FROM _migrations WHERE id = '003_signals.sql'"
+    );
+    assert.equal(mig003.rows.length, 1, '003_signals.sql recorded exactly once');
+
+    // Events table still intact (migration does NOT touch it)
+    const eventsResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+    );
+    assert.equal(eventsResult.rows.length, 1, 'events table still exists (not touched by 003)');
+  });
+});
+
+// ─── Suite 13: upsertSignals — insert, dedup, signal_sections rewrite ────────
+
+// Helper: build a minimal valid SignalRow
+function makeSignal(overrides: Partial<SignalRow> & { signalId: string }): SignalRow {
+  return {
+    source: overrides.source ?? 'gkg',
+    signalId: overrides.signalId,
+    title: overrides.title !== undefined ? overrides.title : 'Test signal',
+    url: overrides.url !== undefined ? overrides.url : 'https://example.com/sig',
+    tone: overrides.tone !== undefined ? overrides.tone : -2.5,
+    themes: overrides.themes !== undefined ? overrides.themes : 'ENV_OIL;ECON_TRADE',
+    persons: overrides.persons !== undefined ? overrides.persons : null,
+    organizations: overrides.organizations !== undefined ? overrides.organizations : null,
+    lat: overrides.lat !== undefined ? overrides.lat : 40.0,
+    lon: overrides.lon !== undefined ? overrides.lon : -3.0,
+    country: overrides.country !== undefined ? overrides.country : 'ES',
+    occurredAt: overrides.occurredAt !== undefined ? overrides.occurredAt : Date.now() - 1000,
+    capturedAt: overrides.capturedAt !== undefined ? overrides.capturedAt : Date.now(),
+    rawJson: overrides.rawJson !== undefined ? overrides.rawJson : null,
+    sections: overrides.sections ?? [{ section: 'commodities_energy', matchedBy: 'theme' }],
+  };
+}
+
+describe('upsertSignals() — insert + dedup + signal_sections rewrite', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+  });
+
+  it('inserts a signal row and its sections', async () => {
+    await upsertSignals([
+      makeSignal({
+        signalId: 'SIG-001',
+        sections: [
+          { section: 'commodities_energy', matchedBy: 'theme' },
+          { section: 'trade_sanctions', matchedBy: 'keyword' },
+        ],
+      }),
+    ]);
+
+    const rows = await getSignals({ sinceMs: 0 });
+    const sig = rows.find((r) => r.signalId === 'SIG-001');
+    assert.ok(sig !== undefined, 'SIG-001 inserted');
+    assert.equal(sig.sections.length, 2, '2 sections persisted');
+    const sectionNames = sig.sections.map((s) => s.section).sort();
+    assert.deepEqual(sectionNames, ['commodities_energy', 'trade_sanctions']);
+  });
+
+  it('UPSERT on same signal_id updates tone without duplicating', async () => {
+    await upsertSignals([makeSignal({ signalId: 'SIG-DUP', tone: -5.0, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] })]);
+    await upsertSignals([makeSignal({ signalId: 'SIG-DUP', tone: 8.0, sections: [{ section: 'trade_sanctions', matchedBy: 'keyword' }] })]);
+
+    const rows = await getSignals({ sinceMs: 0 });
+    const dups = rows.filter((r) => r.signalId === 'SIG-DUP');
+    assert.equal(dups.length, 1, 'only one row (no duplicate)');
+    assert.equal(dups[0]?.tone, 8.0, 'tone updated to 8.0');
+  });
+
+  it('UPSERT rewrites signal_sections — old sections replaced', async () => {
+    await upsertSignals([
+      makeSignal({
+        signalId: 'SIG-REWRITE',
+        sections: [
+          { section: 'commodities_energy', matchedBy: 'theme' },
+          { section: 'critical_minerals', matchedBy: 'keyword' },
+        ],
+      }),
+    ]);
+
+    // Re-upsert with completely different sections
+    await upsertSignals([
+      makeSignal({
+        signalId: 'SIG-REWRITE',
+        sections: [{ section: 'trade_sanctions', matchedBy: 'entity' }],
+      }),
+    ]);
+
+    const rows = await getSignals({ sinceMs: 0 });
+    const sig = rows.find((r) => r.signalId === 'SIG-REWRITE');
+    assert.ok(sig !== undefined, 'SIG-REWRITE found');
+    // Only the new section should remain
+    assert.equal(sig.sections.length, 1, 'old sections replaced (only 1 remains)');
+    assert.equal(sig.sections[0]?.section, 'trade_sanctions', 'new section is trade_sanctions');
+  });
+
+  it('handles empty array without error', async () => {
+    await upsertSignals([]); // must not throw
+  });
+});
+
+// ─── Suite 14: getSignals — filters ──────────────────────────────────────────
+
+describe('getSignals() — filter by section / minToneMag / sinceMs / limit', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const now = Date.now();
+    await upsertSignals([
+      makeSignal({ signalId: 'F-COM', tone: -8.0, capturedAt: now, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+      makeSignal({ signalId: 'F-SEM', tone: 2.0,  capturedAt: now, sections: [{ section: 'semis_ai_tech', matchedBy: 'keyword' }] }),
+      makeSignal({ signalId: 'F-TRA', tone: -15.0, capturedAt: now, sections: [{ section: 'trade_sanctions', matchedBy: 'theme' }] }),
+      makeSignal({ signalId: 'F-OLD', tone: -5.0, capturedAt: now - 200_000, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+      makeSignal({ signalId: 'F-NULL', tone: null, capturedAt: now, sections: [{ section: 'commodities_energy', matchedBy: 'keyword' }] }),
+    ]);
+  });
+
+  it('filter by section=commodities_energy', async () => {
+    const rows = await getSignals({ section: 'commodities_energy' });
+    const ids = rows.map((r) => r.signalId);
+    assert.ok(ids.includes('F-COM'), 'F-COM included');
+    assert.ok(ids.includes('F-NULL'), 'F-NULL included (same section)');
+    assert.ok(!ids.includes('F-SEM'), 'F-SEM excluded');
+    assert.ok(!ids.includes('F-TRA'), 'F-TRA excluded');
+    assert.ok(rows.every((r) => r.sections.some((s) => s.section === 'commodities_energy')), 'all rows have commodities_energy section');
+  });
+
+  it('filter by minToneMag=10 excludes low-magnitude tones and null tones', async () => {
+    const rows = await getSignals({ minToneMag: 10 });
+    const ids = rows.map((r) => r.signalId);
+    assert.ok(ids.includes('F-TRA'), 'F-TRA included (|tone|=15 >= 10)');
+    assert.ok(!ids.includes('F-COM'), 'F-COM excluded (|tone|=8 < 10)');
+    assert.ok(!ids.includes('F-SEM'), 'F-SEM excluded (|tone|=2 < 10)');
+    assert.ok(!ids.includes('F-NULL'), 'F-NULL excluded (tone is null)');
+  });
+
+  it('filter by sinceMs excludes old signals', async () => {
+    const now = Date.now();
+    const rows = await getSignals({ sinceMs: now - 50_000 });
+    const ids = rows.map((r) => r.signalId);
+    assert.ok(!ids.includes('F-OLD'), 'F-OLD excluded by sinceMs');
+    assert.ok(ids.includes('F-COM'), 'F-COM included (recent)');
+  });
+
+  it('filter by limit', async () => {
+    const rows = await getSignals({ limit: 2 });
+    assert.ok(rows.length <= 2, 'limit=2 returns at most 2 rows');
+  });
+
+  it('no filters returns all signals ordered by captured_at DESC', async () => {
+    const rows = await getSignals({ sinceMs: 0 });
+    assert.ok(rows.length >= 5, 'at least 5 signals returned');
+    for (let i = 1; i < rows.length; i++) {
+      assert.ok(
+        (rows[i - 1]?.capturedAt ?? 0) >= (rows[i]?.capturedAt ?? 0),
+        'ordered captured_at DESC'
+      );
+    }
+  });
+});
+
+// ─── Suite 15: getSignalTrend — aggregation ───────────────────────────────────
+
+describe('getSignalTrend() — volume + avgTone per bucket', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    // Two signals in bucket 0 (captured_at = 0..3599999) and one in bucket 2 (captured_at = 7200000)
+    // Bucket size = 3_600_000 ms (1h)
+    await upsertSignals([
+      makeSignal({ signalId: 'T-1', tone: -4.0, capturedAt: 1_000_000, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+      makeSignal({ signalId: 'T-2', tone: 2.0,  capturedAt: 2_000_000, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+      makeSignal({ signalId: 'T-3', tone: null, capturedAt: 3_000_000, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+      makeSignal({ signalId: 'T-4', tone: 6.0,  capturedAt: 7_200_000, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+    ]);
+  });
+
+  it('aggregates volume and avgTone by 1h bucket', async () => {
+    const trend = await getSignalTrend('commodities_energy');
+
+    // Expect at least 2 buckets
+    assert.ok(trend.length >= 2, `at least 2 buckets (got ${trend.length})`);
+
+    // Bucket at floor(1_000_000 / 3_600_000)*3_600_000 = 0
+    const bucket0 = trend.find((p) => p.bucketMs === 0);
+    assert.ok(bucket0 !== undefined, 'bucket at 0ms exists');
+    assert.equal(bucket0.volume, 3, 'bucket 0 has volume=3 (T-1, T-2, T-3)');
+    // avgTone ignores null (T-3): mean of -4.0 and 2.0 = -1.0
+    assert.ok(bucket0.avgTone !== null, 'avgTone is not null (non-null tones exist)');
+    assert.ok(Math.abs((bucket0.avgTone ?? 0) - (-1.0)) < 0.001, `avgTone ~= -1.0 (got ${bucket0.avgTone})`);
+
+    // Bucket for T-4 at floor(7_200_000 / 3_600_000)*3_600_000 = 7_200_000
+    const bucket2 = trend.find((p) => p.bucketMs === 7_200_000);
+    assert.ok(bucket2 !== undefined, 'bucket at 7_200_000ms exists');
+    assert.equal(bucket2.volume, 1, 'bucket 2 has volume=1 (T-4)');
+    assert.ok(Math.abs((bucket2.avgTone ?? 0) - 6.0) < 0.001, 'avgTone=6.0 for T-4');
+  });
+
+  it('all-null-tone bucket returns avgTone=null but counts volume', async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    await upsertSignals([
+      makeSignal({ signalId: 'NULL-1', tone: null, capturedAt: 500_000, sections: [{ section: 'semis_ai_tech', matchedBy: 'keyword' }] }),
+      makeSignal({ signalId: 'NULL-2', tone: null, capturedAt: 600_000, sections: [{ section: 'semis_ai_tech', matchedBy: 'keyword' }] }),
+    ]);
+
+    const trend = await getSignalTrend('semis_ai_tech');
+    assert.ok(trend.length >= 1, 'at least 1 bucket');
+    const bucket = trend[0];
+    assert.ok(bucket !== undefined);
+    assert.equal(bucket.volume, 2, 'volume=2');
+    assert.equal(bucket.avgTone, null, 'avgTone=null when all tones are null');
+  });
+
+  it('sinceMs filter restricts buckets', async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const now = Date.now();
+    await upsertSignals([
+      makeSignal({ signalId: 'S-OLD', tone: -1.0, capturedAt: now - 7_200_000, sections: [{ section: 'trade_sanctions', matchedBy: 'theme' }] }),
+      makeSignal({ signalId: 'S-NEW', tone: 3.0,  capturedAt: now, sections: [{ section: 'trade_sanctions', matchedBy: 'theme' }] }),
+    ]);
+
+    const trend = await getSignalTrend('trade_sanctions', { sinceMs: now - 3_600_000 });
+    // Only S-NEW should be included
+    assert.equal(trend.length, 1, '1 bucket (old excluded by sinceMs)');
+    assert.equal(trend[0]?.volume, 1, 'volume=1 (only S-NEW)');
+  });
+
+  it('custom bucketMs (30min) produces correct bucket floor', async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const bucket30min = 1_800_000;
+    await upsertSignals([
+      makeSignal({ signalId: 'B30-1', tone: 1.0, capturedAt: 0,         sections: [{ section: 'critical_minerals', matchedBy: 'keyword' }] }),
+      makeSignal({ signalId: 'B30-2', tone: 3.0, capturedAt: 1_000_000, sections: [{ section: 'critical_minerals', matchedBy: 'keyword' }] }),
+      makeSignal({ signalId: 'B30-3', tone: 5.0, capturedAt: 2_000_000, sections: [{ section: 'critical_minerals', matchedBy: 'keyword' }] }),
+    ]);
+
+    const trend = await getSignalTrend('critical_minerals', { bucketMs: bucket30min });
+    // capturedAt 0 and 1_000_000 → bucket floor 0; capturedAt 2_000_000 → bucket floor 1_800_000
+    assert.ok(trend.length >= 2, 'at least 2 buckets with 30min bucket');
+    const b0 = trend.find((p) => p.bucketMs === 0);
+    assert.ok(b0 !== undefined && b0.volume === 2, 'bucket 0 has 2 signals');
+    const b1 = trend.find((p) => p.bucketMs === 1_800_000);
+    assert.ok(b1 !== undefined && b1.volume === 1, 'bucket 1_800_000 has 1 signal');
+  });
+});
+
+// ─── Suite 16: purgeAndDownsample — signals purged, events intact ─────────────
+
+describe('purgeAndDownsample() — purges signals, leaves events intact', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    // Old signal (occurred_at < cutoff) — should be purged
+    await upsertSignals([
+      makeSignal({ signalId: 'P-OLD', occurredAt: cutoff - 2000, capturedAt: cutoff - 2000, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+    ]);
+    // New signal (occurred_at = now) — should survive
+    await upsertSignals([
+      makeSignal({ signalId: 'P-NEW', occurredAt: now, capturedAt: now, sections: [{ section: 'commodities_energy', matchedBy: 'theme' }] }),
+    ]);
+    // Event — must survive regardless
+    await upsertEvents([
+      makeEvent({ sourceEventId: 'EVT-SAFE', occurredAt: now, capturedAt: now }),
+    ]);
+    // Old event — purged by existing logic
+    await upsertEvents([
+      makeEvent({ sourceEventId: 'EVT-GONE', occurredAt: cutoff - 3000, capturedAt: cutoff - 3000 }),
+    ]);
+  });
+
+  it('purges old signals and their signal_sections via CASCADE', async () => {
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    await purgeAndDownsample(cutoff);
+
+    const signals = await getSignals({ sinceMs: 0 });
+    const ids = signals.map((s) => s.signalId);
+    assert.ok(!ids.includes('P-OLD'), 'old signal P-OLD purged');
+    assert.ok(ids.includes('P-NEW'), 'recent signal P-NEW survives');
+
+    // Verify signal_sections were cascade-deleted by checking DB directly
+    const { getDb } = await import('../src/index.js');
+    const db = getDb();
+    const sectResult = await db.execute(
+      "SELECT ss.* FROM signal_sections ss INNER JOIN signals s ON s.id = ss.signal_id WHERE s.signal_id = 'P-OLD'"
+    );
+    assert.equal(sectResult.rows.length, 0, 'signal_sections for P-OLD cascade-deleted');
+  });
+
+  it('events are NOT touched by the signals purge step', async () => {
+    const events = await getEvents({ sinceMs: 0 });
+    const ids = events.map((e) => e.sourceEventId);
+    assert.ok(ids.includes('EVT-SAFE'), 'EVT-SAFE still present after purge');
+  });
+
+  it('signals table is NOT touched by the events purge step (no cross-contamination)', async () => {
+    // P-NEW must still be there (it was recent — survived the signals purge)
+    const signals = await getSignals({ sinceMs: 0 });
+    const ids = signals.map((s) => s.signalId);
+    assert.ok(ids.includes('P-NEW'), 'P-NEW signal unaffected by events purge logic');
   });
 });

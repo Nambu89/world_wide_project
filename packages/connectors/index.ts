@@ -9,4 +9,6 @@ export { fetchNews } from './edu/news.js';
 export { fetchUsgs } from './geo/usgs.js';
 export { fetchEonet } from './geo/eonet.js';
 export { fetchGdelt } from './geo/gdelt.js';
+// Radar Geoeconómico Temático (Fase 2 rebanada 2): conector GKG → SignalRow (tabla signals).
+export { fetchGkg } from './geo/gkg.js';
 export type { ConnectorResult } from './finance/markets.js';

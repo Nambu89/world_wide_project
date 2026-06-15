@@ -1,6 +1,55 @@
 // packages/store/src/types.ts
 // Domain types — map 1:1 to DB columns (D-100: wide-typed, no EAV)
 
+// ─── Signals — Radar Geoeconómico Temático (T-15, ADR-011) ──────────────────
+
+/**
+ * The 6 thematic sections of the geoeconómic radar.
+ * D-200/D-003: article-level signals, separate from events (geo-event).
+ */
+export type Section =
+  | 'political_instability'
+  | 'commodities_energy'
+  | 'critical_minerals'
+  | 'semis_ai_tech'
+  | 'digital_infra_cyber'
+  | 'trade_sanctions';
+
+/**
+ * Article-level signal row — camelCase (L-1: web wire is camelCase).
+ * Persisted in `signals` + `signal_sections` tables (migration 003).
+ * source: 'gkg' = GDELT GKG; 'rss-thematic' = curated RSS feed.
+ * tone: AvgTone -100..+100 from GKG V2Tone col16; null for RSS.
+ * sections: many-to-many via signal_sections bridge table (D-200).
+ */
+export interface SignalRow {
+  source: 'gkg' | 'rss-thematic';
+  signalId: string;                   // {sig.id}: GKGRECORDID or canonical url
+  title: string | null;
+  url: string | null;
+  tone: number | null;                // {sig.tone}: AvgTone; null for RSS
+  themes: string | null;              // V1Themes ;-joined, raw (auditing)
+  persons: string | null;             // V2Persons ;-joined
+  organizations: string | null;       // V2Organizations ;-joined
+  lat: number | null;                 // {sig.geo} best-effort (V2Locations type 3/4)
+  lon: number | null;
+  country: string | null;
+  occurredAt: number | null;          // epoch ms from col2 DATE; pubDate for RSS
+  capturedAt: number;                 // {schema.snapshot.ts} epoch ms
+  rawJson: string | null;             // V2Tone full + matchedBy (audit)
+  sections: Array<{ section: Section; matchedBy: 'theme' | 'keyword' | 'entity' }>;
+}
+
+/**
+ * Aggregated trend point for a section — volume + average tone per time bucket.
+ * {sig.trend}: volume counts all signals; avgTone averages non-null tones only.
+ */
+export interface SignalTrendPoint {
+  bucketMs: number;           // epoch ms floor of the time bucket
+  volume: number;             // count of signals in this bucket
+  avgTone: number | null;     // mean AvgTone of signals with non-null tone; null if all null
+}
+
 // ─── Events (T-08, ADR-010) ──────────────────────────────────────────────────
 
 /**

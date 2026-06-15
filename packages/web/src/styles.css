@@ -653,6 +653,314 @@ html, body, #root {
 }
 
 /* ============================================================
+   Radar Panel — T-20 / D-206 / ADR-008
+   Mobile-first 375px → desktop 1200px.
+   Uses design tokens only — no hardcoded hex values.
+   ============================================================ */
+
+.radar-panel {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.radar-panel__heading {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+/* ------------------------------------------------------------------
+   Section accordion list
+   ------------------------------------------------------------------ */
+.radar-panel__sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.radar-panel__section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  overflow: hidden;
+  background-color: var(--color-bg-elevated);
+  transition: border-color 0.15s;
+}
+
+.radar-panel__section.active {
+  border-color: var(--color-accent);
+}
+
+/* ------------------------------------------------------------------
+   Section header (button)
+   ------------------------------------------------------------------ */
+.radar-panel__section-hdr {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  min-height: var(--touch-target-min);
+  text-align: left;
+  transition: background-color 0.15s;
+}
+
+.radar-panel__section-hdr:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.radar-panel__section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--rounded-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  color: #fff;
+  line-height: 1;
+  /* background-color set inline via sectionMeta.color */
+}
+
+.radar-panel__section-label {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.radar-panel__tone-badge {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  /* color set inline */
+}
+
+.radar-panel__section-loading {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.radar-panel__chevron {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------------
+   Accordion body
+   ------------------------------------------------------------------ */
+.radar-panel__section-body {
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ------------------------------------------------------------------
+   Trend row: sparkline + avg tone
+   ------------------------------------------------------------------ */
+.radar-panel__trend-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.radar-panel__trend-canvas {
+  display: block;
+  flex-shrink: 0;
+  border-radius: var(--rounded-sm);
+  background-color: var(--color-bg-primary);
+}
+
+.radar-panel__tone-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  /* color set inline */
+}
+
+.radar-panel__tone-sub {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-normal);
+  color: var(--color-text-secondary);
+  margin-left: var(--space-1);
+}
+
+/* ------------------------------------------------------------------
+   Headlines list
+   ------------------------------------------------------------------ */
+.radar-panel__headlines {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.radar-panel__headline-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  background-color: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-sm);
+  transition: border-color 0.15s;
+}
+
+.radar-panel__headline-row:hover {
+  border-color: var(--color-accent);
+}
+
+.radar-panel__headline-tone {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  min-width: 36px;
+  text-align: right;
+  padding-top: 2px;
+  /* color set inline */
+}
+
+.radar-panel__headline-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.radar-panel__headline-title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.radar-panel__headline-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.radar-panel__headline-link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.radar-panel__headline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.radar-panel__headline-country {
+  font-weight: var(--font-weight-medium);
+}
+
+.radar-panel__headline-date {
+  opacity: 0.75;
+}
+
+/* ------------------------------------------------------------------
+   Entity chips
+   ------------------------------------------------------------------ */
+.radar-panel__entities {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.radar-panel__entity-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.radar-panel__entity-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.radar-panel__entity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.radar-panel__entity-chip {
+  padding: 2px var(--space-2);
+  background-color: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-pill);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 160px;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------
+   Attribution footer
+   ------------------------------------------------------------------ */
+.radar-panel__attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: auto;
+}
+
+.radar-panel__attr-link {
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+
+.radar-panel__attr-link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+/* ------------------------------------------------------------------
+   Responsive — at desktop (1200px+) chips get a bit more room
+   ------------------------------------------------------------------ */
+@media (min-width: 1200px) {
+  .radar-panel__entity-chip {
+    max-width: 200px;
+  }
+  .radar-panel__headline-title {
+    /* Allow wrapping on wider panel; prevents truncation of long titles */
+    white-space: normal;
+  }
+}
+
+/* ============================================================
    MapLibre overrides (keep attribution visible)
    ============================================================ */
 .maplibregl-ctrl-attrib {

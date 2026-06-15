@@ -27,9 +27,9 @@
 //
 // Devuelve datos normalizados o resultado vacío gracioso. NUNCA lanza hacia arriba.
 
-import { inflateRawSync } from "node:zlib";
 import type { EventRow } from "@www/store";
 import { severityGdelt } from "./severity.js";
+import { extractZipFirstEntry } from "./zip.js";
 
 // ─── Endpoints ───────────────────────────────────────────────────────────────
 
@@ -109,78 +109,8 @@ export function parseLastupdateTxt(text: string): string | null {
   return null;
 }
 
-// ─── Extracción ZIP zero-dep (C-4) ───────────────────────────────────────────
-//
-// PKZIP local-file-header layout (offsets en el buffer):
-//   Offset 0:  4 bytes — firma "PK\x03\x04"
-//   Offset 8:  2 bytes uint16 LE — método de compresión (8 = deflate)
-//   Offset 18: 4 bytes uint32 LE — compressed size
-//   Offset 26: 2 bytes uint16 LE — filename length
-//   Offset 28: 2 bytes uint16 LE — extra field length
-//   Offset 30: <filename_len> bytes — filename
-//   Offset 30 + filename_len: <extra_len> bytes — extra field
-//   Offset 30 + filename_len + extra_len: <compressed_size> bytes — datos comprimidos
-//
-// Validamos firma y método antes de inflar. Si algo no cuadra → null (BLOCKED gracioso).
-
-export function extractZipFirstEntry(buf: Buffer): Buffer | null {
-  // Necesitamos al menos 30 bytes para el header fijo
-  if (buf.length < 30) {
-    console.error("[gdelt] ZIP demasiado pequeño para tener local-file-header");
-    return null;
-  }
-
-  // Validar firma PK\x03\x04
-  if (buf[0] !== 0x50 || buf[1] !== 0x4b || buf[2] !== 0x03 || buf[3] !== 0x04) {
-    console.error("[gdelt] ZIP: firma inválida — no es PKZIP local-file-header");
-    return null;
-  }
-
-  // Método de compresión @offset 8, uint16 LE
-  const method = buf.readUInt16LE(8);
-  if (method !== 8) {
-    // método 0 = almacenado (sin compresión), también manejable
-    if (method === 0) {
-      // Stored: los datos van directos, compressed_size == uncompressed_size
-      const compressedSize = buf.readUInt32LE(18);
-      const filenameLen = buf.readUInt16LE(26);
-      const extraLen = buf.readUInt16LE(28);
-      const dataOffset = 30 + filenameLen + extraLen;
-      if (dataOffset + compressedSize > buf.length) {
-        console.error("[gdelt] ZIP stored: buffer insuficiente para los datos");
-        return null;
-      }
-      return buf.subarray(dataOffset, dataOffset + compressedSize);
-    }
-    // Método desconocido → ESCOTILLA (C-4): reportar y devolver null
-    console.error(
-      `[gdelt] ZIP: método de compresión desconocido ${method} (esperado 8=deflate o 0=stored). ` +
-        "BLOCKED: dep fflate MIT requiere ADR del PM — no se añade automáticamente."
-    );
-    return null;
-  }
-
-  // Método 8 = deflate
-  const compressedSize = buf.readUInt32LE(18);
-  const filenameLen = buf.readUInt16LE(26);
-  const extraLen = buf.readUInt16LE(28);
-  const dataOffset = 30 + filenameLen + extraLen;
-
-  if (dataOffset + compressedSize > buf.length) {
-    console.error("[gdelt] ZIP: buffer insuficiente para los datos comprimidos");
-    return null;
-  }
-
-  const compressedData = buf.subarray(dataOffset, dataOffset + compressedSize);
-
-  try {
-    return inflateRawSync(compressedData);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[gdelt] inflateRawSync falló: ${msg}`);
-    return null;
-  }
-}
+// ─── Nota: extractZipFirstEntry se reusa de ./zip.js (T-17 refactor) ─────────
+// Ver packages/connectors/geo/zip.ts para la implementación PKZIP zero-dep.
 
 // ─── Parseo CSV TAB-separated ─────────────────────────────────────────────────
 //
