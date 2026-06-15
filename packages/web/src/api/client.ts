@@ -11,6 +11,8 @@
  *   /api/events       → EventRow[]         (T-13 / T-12, bare array)
  *   /api/signals      → SignalRow[]         (T-20, bare array, camelCase — BUG-1 L-1)
  *   /api/signals/trend → SignalTrendPoint[] (T-20, bare array)
+ *   /api/cii          → CiiRow[]           (T-26, bare array, camelCase — L-1 critical)
+ *   /api/cii/:country → CiiRow[]           (T-26, trend array for a country)
  */
 
 // ---------------------------------------------------------------------------
@@ -103,6 +105,25 @@ interface RawSignalRow {
   capturedAt: number;            // epoch ms
   rawJson: string | null;
   sections: Array<{ section: string; matchedBy: string }>;
+}
+
+/**
+ * Raw CII row from /api/cii and /api/cii/:country.
+ * WIRE FORMAT = camelCase (L-1 critical — same BUG-1 discipline as EventRow/SignalRow).
+ * lat/lon may be null for countries without a centroid; componentsJson is a JSON string.
+ */
+interface RawCiiRow {
+  country: string;
+  composite: number;
+  baselineRisk: number;
+  eventScore: number;
+  dynamicScore: number | null;
+  trend: 'rising' | 'falling' | 'stable' | null;
+  methodologyVersion: string;
+  componentsJson: string;       // JSON string of CiiComponent[]
+  capturedAt: number;           // epoch ms
+  lat: number | null;
+  lon: number | null;
 }
 
 /**
@@ -235,6 +256,51 @@ export interface SignalFilter {
   minToneMag?: number;
 }
 
+/**
+ * One component of a CII score — parsed from componentsJson.
+ * Typed locally; web never imports @www/store (boundary rule).
+ */
+export interface CiiComponent {
+  key: 'conflict' | 'economic' | 'political' | 'social';
+  score: number;
+  signalPresent: boolean;
+  weight: number;
+  sources: string[];
+  detail?: string;
+}
+
+/**
+ * Risk band for CII composite score (0-100).
+ *   0-24  → low
+ *  25-49  → moderate
+ *  50-69  → elevated
+ *  70-100 → high
+ */
+export type CiiBand = 'low' | 'moderate' | 'elevated' | 'high';
+
+/**
+ * View-model for a country CII row consumed by RiskPanel + MapView.
+ * dominantComponent is derived from componentsJson — the component with the highest score.
+ * Countries without lat/lon are included (panel uses all); MapView discards no-coord rows.
+ */
+export interface CiiCountry {
+  country: string;
+  composite: number;
+  band: CiiBand;
+  baselineRisk: number;
+  eventScore: number;
+  dynamicScore: number | null;
+  trend: 'rising' | 'falling' | 'stable' | null;
+  methodologyVersion: string;
+  components: CiiComponent[];
+  /** Component with highest score — null when componentsJson is empty/invalid */
+  dominantComponent: CiiComponent | null;
+  /** lat/lon present when country has a centroid; null → panel only, no map feature */
+  lat: number | null;
+  lon: number | null;
+  capturedAt: string;   // ISO string
+}
+
 // ---------------------------------------------------------------------------
 // Adapter helpers
 // ---------------------------------------------------------------------------
@@ -312,6 +378,48 @@ function adaptSignalRow(r: RawSignalRow): RadarSignal {
     occurredAt: r.occurredAt != null ? new Date(r.occurredAt).toISOString() : null,
     capturedAt: new Date(r.capturedAt).toISOString(),
     sections: Array.isArray(r.sections) ? r.sections : [],
+  };
+}
+
+/** Derive the CII band from a composite score (0-100). */
+function ciiBandFromScore(composite: number): CiiBand {
+  if (composite < 25) return 'low';
+  if (composite < 50) return 'moderate';
+  if (composite < 70) return 'elevated';
+  return 'high';
+}
+
+function adaptCiiRow(r: RawCiiRow): CiiCountry {
+  let components: CiiComponent[] = [];
+  try {
+    const parsed: unknown = JSON.parse(r.componentsJson);
+    if (Array.isArray(parsed)) {
+      components = parsed as CiiComponent[];
+    }
+  } catch {
+    // componentsJson malformed — treat as no components
+  }
+
+  // Dominant = highest score component (reduce sin init: seguro porque length>0)
+  const dominantComponent: CiiComponent | null =
+    components.length > 0
+      ? components.reduce((best, c) => (c.score > best.score ? c : best))
+      : null;
+
+  return {
+    country: r.country,
+    composite: r.composite,
+    band: ciiBandFromScore(r.composite),
+    baselineRisk: r.baselineRisk,
+    eventScore: r.eventScore,
+    dynamicScore: r.dynamicScore,
+    trend: r.trend,
+    methodologyVersion: r.methodologyVersion,
+    components,
+    dominantComponent,
+    lat: r.lat,
+    lon: r.lon,
+    capturedAt: new Date(r.capturedAt).toISOString(),
   };
 }
 
@@ -457,4 +565,33 @@ export async function getSignalTrend(
     volume: p.volume,
     avgTone: p.avgTone,
   }));
+}
+
+/**
+ * Fetch CII scores for all countries from /api/cii.
+ * All rows are returned (no lat/lon filtering — panel uses all).
+ *
+ * Attribution: CII propio · datos: USGS/NASA EONET/GDELT/GKG
+ */
+export async function getCii(): Promise<CiiCountry[]> {
+  const raw = await apiFetch<RawCiiRow[]>('/api/cii');
+  if (!Array.isArray(raw)) return [];
+  return raw.map(adaptCiiRow);
+}
+
+/**
+ * Fetch CII trend (historical rows) for a single country from /api/cii/:country.
+ *
+ * @param country  ISO-2 or name string — URL-encoded.
+ * @param since    Optional epoch ms lower bound.
+ */
+export async function getCiiTrend(country: string, since?: number): Promise<CiiCountry[]> {
+  const encoded = encodeURIComponent(country);
+  const params = new URLSearchParams();
+  if (since !== undefined) params.set('since', String(since));
+  const qs = params.toString();
+  const path = qs ? `/api/cii/${encoded}?${qs}` : `/api/cii/${encoded}`;
+  const raw = await apiFetch<RawCiiRow[]>(path);
+  if (!Array.isArray(raw)) return [];
+  return raw.map(adaptCiiRow);
 }

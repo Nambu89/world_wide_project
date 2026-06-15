@@ -8,14 +8,10 @@
  *
  * T-13: EventsPanel mounted alongside FinancePanel.
  * T-20: RadarPanel (3rd tab) + activeSection state for map-tie.
- *   - Panel tabs: Finance | Events | Radar
- *   - Event type toggles are owned by App and threaded into both EventsPanel
- *     (for the list filter) and MapView (via activeLayers Set).
- *   - Signal section toggles are owned by App and threaded into MapView.
- *     Selecting a section in RadarPanel sets activeSection → App enables the
- *     corresponding sig-* layer. political_instability reuses evt-* layers.
- *   - activeLayers = event toggle keys + signal toggle keys.
- *     All default to ON so the map is populated on load.
+ * T-26: RiskPanel (4th tab 'Risk') + activeCountry state for map-tie.
+ *   - Panel tabs: Finance | Events | Radar | Risk
+ *   - activeLayers includes 'cii' toggle key (default ON).
+ *   - Selecting a country in RiskPanel sets activeCountry → MapView flies to centroid.
  */
 
 import { useState } from 'react';
@@ -26,6 +22,7 @@ import RadarPanel, {
   SIGNAL_TOGGLE_KEYS,
   type RadarSectionKey,
 } from './panels/RadarPanel';
+import RiskPanel from './panels/RiskPanel';
 import { LAYERS, TOGGLE_KEYS } from './map/layers.config';
 
 // ---------------------------------------------------------------------------
@@ -45,7 +42,7 @@ function buildInitialActive(): Set<string> {
 // Panel tab types
 // ---------------------------------------------------------------------------
 
-type PanelTab = 'finance' | 'events' | 'radar';
+type PanelTab = 'finance' | 'events' | 'radar' | 'risk';
 
 // ---------------------------------------------------------------------------
 // App
@@ -62,6 +59,11 @@ export default function App() {
    * State is React-owned — NO imperative map calls.
    */
   const [activeSection, setActiveSection] = useState<RadarSectionKey | null>(null);
+  /**
+   * activeCountry: the country selected in RiskPanel (T-26 map-tie).
+   * MapView reads it to flyTo that country's centroid; the panel row highlights.
+   */
+  const [activeCountry, setActiveCountry] = useState<string | null>(null);
 
   /** Toggle a single layer key in the activeLayers set. */
   const toggleLayer = (key: string) => {
@@ -95,6 +97,19 @@ export default function App() {
     });
   };
 
+  /**
+   * Called by RiskPanel when user selects a country (map-tie).
+   * Ensures the CII layer is visible and flags the country for MapView.flyTo.
+   */
+  const handleCountrySelect = (country: string) => {
+    setActiveCountry(country);
+    setActiveLayers((prev) => {
+      const next = new Set(prev);
+      next.add('cii');
+      return next;
+    });
+  };
+
   /** Label for a legacy map toggle (non-events). */
   const labelForKey = (key: string): string => {
     return LAYERS.find((l) => l.toggleKey === key)?.label?.split(' ')[0] ?? key;
@@ -108,12 +123,15 @@ export default function App() {
   );
 
   const panelTitle =
-    activeTab === 'finance' ? 'Finance' : activeTab === 'events' ? 'Events' : 'Radar';
+    activeTab === 'finance' ? 'Finance'
+    : activeTab === 'events' ? 'Events'
+    : activeTab === 'radar' ? 'Radar'
+    : 'Risk';
 
   return (
     <div className="app-layout">
       {/* Map — fills viewport on mobile, shrinks on desktop via CSS */}
-      <MapView activeLayers={activeLayers} />
+      <MapView activeLayers={activeLayers} activeCountry={activeCountry} />
 
       {/* Layer toggle controls (non-events legacy; event types controlled in panel) */}
       {legacyToggleKeys.length > 0 && (
@@ -185,6 +203,16 @@ export default function App() {
           >
             Radar
           </button>
+          <button
+            role="tab"
+            type="button"
+            className={`panel-tab${activeTab === 'risk' ? ' active' : ''}`}
+            aria-selected={activeTab === 'risk'}
+            aria-controls="panel-content"
+            onClick={() => setActiveTab('risk')}
+          >
+            Risk
+          </button>
         </div>
 
         {/* Panel content */}
@@ -205,6 +233,12 @@ export default function App() {
             <RadarPanel
               activeSection={activeSection}
               onSectionSelect={handleSectionSelect}
+            />
+          )}
+          {activeTab === 'risk' && (
+            <RiskPanel
+              activeCountry={activeCountry}
+              onCountrySelect={handleCountrySelect}
             />
           )}
         </div>

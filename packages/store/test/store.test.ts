@@ -28,8 +28,12 @@ import {
   upsertSignals,
   getSignals,
   getSignalTrend,
+  insertCiiSnapshots,
+  getLatestCii,
+  getCiiTrend,
+  getPriorCii,
 } from '../src/index.js';
-import type { EventRow } from '../src/index.js';
+import type { EventRow, CiiSnapshotRow } from '../src/index.js';
 
 function makeInMemoryClient(): LibsqlClient {
   return createClient({ url: ':memory:' });
@@ -957,5 +961,240 @@ describe('purgeAndDownsample() — purges signals, leaves events intact', () => 
     const signals = await getSignals({ sinceMs: 0 });
     const ids = signals.map((s) => s.signalId);
     assert.ok(ids.includes('P-NEW'), 'P-NEW signal unaffected by events purge logic');
+  });
+});
+
+// ─── Helpers for CII tests ────────────────────────────────────────────────────
+
+function makeCii(overrides: Partial<CiiSnapshotRow> & { country: string; capturedAt: number }): CiiSnapshotRow {
+  return {
+    country: overrides.country,
+    composite: overrides.composite ?? 42.0,
+    baselineRisk: overrides.baselineRisk ?? 30.0,
+    eventScore: overrides.eventScore ?? 12.0,
+    dynamicScore: overrides.dynamicScore !== undefined ? overrides.dynamicScore : null,
+    trend: overrides.trend !== undefined ? overrides.trend : null,
+    methodologyVersion: overrides.methodologyVersion ?? '1.0.0',
+    componentsJson: overrides.componentsJson ?? '{"stability":30,"event":12}',
+    capturedAt: overrides.capturedAt,
+  };
+}
+
+// ─── Suite 17: migrate() — migration 004_cii idempotent (HAZARD W-2 guard) ────
+
+describe('migrate() — migration 004_cii.sql (T-21, HAZARD W-2)', () => {
+  it('creates cii_snapshots table and ix_cii_country_time index — idempotent 3x', async () => {
+    const client = makeInMemoryClient();
+
+    await runMigrations(client);
+    await runMigrations(client);
+    await runMigrations(client);
+
+    // Assert table exists (catches HAZARD W-2: silent discard of CREATE due to leading --)
+    const tableResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='cii_snapshots'"
+    );
+    assert.equal(tableResult.rows.length, 1, 'cii_snapshots table created');
+
+    // Assert index exists
+    const indexResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='ix_cii_country_time'"
+    );
+    assert.equal(indexResult.rows.length, 1, 'ix_cii_country_time index exists');
+
+    // Migration 004 recorded exactly once
+    const mig004 = await client.execute(
+      "SELECT id FROM _migrations WHERE id = '004_cii.sql'"
+    );
+    assert.equal(mig004.rows.length, 1, '004_cii.sql recorded exactly once');
+
+    // Prior tables still intact
+    const eventsResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+    );
+    assert.equal(eventsResult.rows.length, 1, 'events table still exists (not touched by 004)');
+
+    const signalsResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='signals'"
+    );
+    assert.equal(signalsResult.rows.length, 1, 'signals table still exists (not touched by 004)');
+  });
+});
+
+// ─── Suite 18: insertCiiSnapshots + getLatestCii ──────────────────────────────
+
+describe('insertCiiSnapshots() + getLatestCii()', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+  });
+
+  it('inserts and reads back a CII snapshot (round-trip)', async () => {
+    const now = Date.now();
+    await insertCiiSnapshots([
+      makeCii({ country: 'ES', capturedAt: now, composite: 55.5, baselineRisk: 40.0, eventScore: 15.5, dynamicScore: 2.3, trend: 'rising', methodologyVersion: '1.0.0', componentsJson: '{"a":1}' }),
+    ]);
+
+    const rows = await getLatestCii();
+    const es = rows.find((r) => r.country === 'ES');
+    assert.ok(es !== undefined, 'ES row present');
+    assert.ok(Math.abs(es.composite - 55.5) < 0.001, 'composite correct');
+    assert.ok(Math.abs(es.baselineRisk - 40.0) < 0.001, 'baselineRisk correct');
+    assert.ok(Math.abs(es.eventScore - 15.5) < 0.001, 'eventScore correct');
+    assert.ok(es.dynamicScore !== null && Math.abs(es.dynamicScore - 2.3) < 0.001, 'dynamicScore correct');
+    assert.equal(es.trend, 'rising', 'trend correct');
+    assert.equal(es.methodologyVersion, '1.0.0', 'methodologyVersion correct');
+    assert.equal(es.componentsJson, '{"a":1}', 'componentsJson correct');
+    assert.equal(es.capturedAt, now, 'capturedAt correct');
+    assert.ok(es.id !== undefined && es.id > 0, 'id assigned by DB');
+  });
+
+  it('getLatestCii returns 1 row per country — the most recent snapshot', async () => {
+    const now = Date.now();
+    const earlier = now - 30_000;
+
+    // Two snapshots for DE — only the later one should appear in getLatestCii
+    await insertCiiSnapshots([
+      makeCii({ country: 'DE', capturedAt: earlier, composite: 20.0, baselineRisk: 15.0, eventScore: 5.0 }),
+      makeCii({ country: 'DE', capturedAt: now,     composite: 35.0, baselineRisk: 25.0, eventScore: 10.0 }),
+    ]);
+
+    const rows = await getLatestCii();
+    const deRows = rows.filter((r) => r.country === 'DE');
+    assert.equal(deRows.length, 1, 'only 1 DE row from getLatestCii');
+    assert.ok(Math.abs((deRows[0]?.composite ?? 0) - 35.0) < 0.001, 'DE shows the most recent composite (35.0)');
+  });
+
+  it('handles null dynamicScore and null trend', async () => {
+    const now = Date.now();
+    await insertCiiSnapshots([
+      makeCii({ country: 'FR', capturedAt: now, dynamicScore: null, trend: null }),
+    ]);
+
+    const rows = await getLatestCii();
+    const fr = rows.find((r) => r.country === 'FR');
+    assert.ok(fr !== undefined, 'FR row present');
+    assert.equal(fr.dynamicScore, null, 'dynamicScore is null');
+    assert.equal(fr.trend, null, 'trend is null');
+  });
+
+  it('handles empty array without error', async () => {
+    await insertCiiSnapshots([]); // must not throw
+  });
+});
+
+// ─── Suite 19: getCiiTrend ────────────────────────────────────────────────────
+
+describe('getCiiTrend(country, sinceMs)', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const base = Date.now();
+    await insertCiiSnapshots([
+      makeCii({ country: 'IT', capturedAt: base - 72_000_000, composite: 10.0, baselineRisk: 8.0, eventScore: 2.0 }),
+      makeCii({ country: 'IT', capturedAt: base - 36_000_000, composite: 20.0, baselineRisk: 15.0, eventScore: 5.0 }),
+      makeCii({ country: 'IT', capturedAt: base,              composite: 30.0, baselineRisk: 20.0, eventScore: 10.0 }),
+      makeCii({ country: 'PT', capturedAt: base,              composite: 25.0, baselineRisk: 18.0, eventScore: 7.0 }),
+    ]);
+  });
+
+  it('returns all snapshots for a country since sinceMs, ASC by captured_at', async () => {
+    const sinceMs = Date.now() - 50_000_000;
+    const trend = await getCiiTrend('IT', sinceMs);
+    assert.equal(trend.length, 2, '2 IT rows in window');
+    assert.ok(trend[0] !== undefined && trend[1] !== undefined, 'both rows defined');
+    assert.ok(trend[0].capturedAt <= trend[1].capturedAt, 'ordered ASC by captured_at');
+    assert.ok(Math.abs(trend[0].composite - 20.0) < 0.001, 'first row composite=20.0');
+    assert.ok(Math.abs(trend[1].composite - 30.0) < 0.001, 'second row composite=30.0');
+  });
+
+  it('returns empty array when no rows exist for the country', async () => {
+    const trend = await getCiiTrend('ZZ', 0);
+    assert.equal(trend.length, 0, 'empty for unknown country');
+  });
+
+  it('does not cross-contaminate across countries', async () => {
+    const trend = await getCiiTrend('PT', 0);
+    assert.ok(trend.every((r) => r.country === 'PT'), 'only PT rows returned');
+  });
+});
+
+// ─── Suite 20: getPriorCii ────────────────────────────────────────────────────
+
+describe('getPriorCii(country, aroundMs)', () => {
+  const BASE = 1_700_000_000_000; // fixed epoch to avoid Date.now() drift in assertions
+
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    await insertCiiSnapshots([
+      makeCii({ country: 'GR', capturedAt: BASE - 86_400_000, composite: 10.0, baselineRisk: 8.0, eventScore: 2.0 }),
+      makeCii({ country: 'GR', capturedAt: BASE,              composite: 20.0, baselineRisk: 15.0, eventScore: 5.0 }),
+    ]);
+  });
+
+  it('returns the closest snapshot at or before aroundMs (~24h lookback)', async () => {
+    const prior = await getPriorCii('GR', BASE - 1000);
+    assert.ok(prior !== null, 'prior found');
+    assert.ok(Math.abs(prior.composite - 10.0) < 0.001, 'returns the ~24h-prior snapshot');
+    assert.equal(prior.capturedAt, BASE - 86_400_000, 'capturedAt matches the prior snapshot');
+  });
+
+  it('returns the most recent snapshot when aroundMs >= latest capturedAt', async () => {
+    const prior = await getPriorCii('GR', BASE + 1000);
+    assert.ok(prior !== null, 'prior found');
+    assert.ok(Math.abs(prior.composite - 20.0) < 0.001, 'returns the latest when aroundMs is after all rows');
+  });
+
+  it('returns null when no snapshot exists for the country', async () => {
+    const prior = await getPriorCii('ZZ', BASE);
+    assert.equal(prior, null, 'null for unknown country');
+  });
+});
+
+// ─── Suite 21: purgeAndDownsample — purges cii_snapshots, events/signals intact ─
+
+describe('purgeAndDownsample() — purges cii_snapshots, events and signals intact', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    // Old CII snapshot — should be purged
+    await insertCiiSnapshots([
+      makeCii({ country: 'RU', capturedAt: cutoff - 2000 }),
+    ]);
+    // Recent CII snapshot — should survive
+    await insertCiiSnapshots([
+      makeCii({ country: 'RU', capturedAt: now }),
+    ]);
+
+    // Event — should survive (not purged by CII step)
+    await upsertEvents([makeEvent({ sourceEventId: 'SAFE-EVT', occurredAt: now, capturedAt: now })]);
+  });
+
+  it('purges cii_snapshots older than beforeMs', async () => {
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    await purgeAndDownsample(cutoff);
+
+    const trend = await getCiiTrend('RU', 0);
+    assert.equal(trend.length, 1, 'only 1 RU snapshot survives (the recent one)');
+    assert.ok(trend[0] !== undefined && trend[0].capturedAt >= cutoff, 'surviving snapshot is recent');
+  });
+
+  it('events are NOT purged by the CII purge step', async () => {
+    const events = await getEvents({ sinceMs: 0 });
+    const ids = events.map((e) => e.sourceEventId);
+    assert.ok(ids.includes('SAFE-EVT'), 'SAFE-EVT event survives CII purge step');
   });
 });

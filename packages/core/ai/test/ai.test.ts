@@ -24,7 +24,7 @@ import assert from 'node:assert/strict';
 
 // Importaciones del paquete (NodeNext: extensiones .js en imports relativos)
 import { resolveChain, pickProvider } from '../src/router.js';
-import { serializeContext, generateDailyBriefing, buildGlobalRiskContext } from '../src/briefing.js';
+import { serializeContext, generateDailyBriefing, buildGlobalRiskContext, buildRiskContext } from '../src/briefing.js';
 import { buildBriefingPrompt, FINANCIAL_ANALYST_PERSONA } from '../src/persona.js';
 
 // Importaciones del store para tests de integración con DB :memory:
@@ -369,6 +369,58 @@ describe('buildGlobalRiskContext()', () => {
     ];
     const result = buildGlobalRiskContext(events);
     assert.ok(result.includes('—'), 'debe mostrar "—" cuando el país es null');
+  });
+});
+
+// ─── Suite 3b: buildRiskContext() (T-27: CII por país) ────────────────────────
+
+describe('buildRiskContext()', () => {
+  const ciiRow = (over: Partial<import('@www/store').CiiSnapshotRow> = {}): import('@www/store').CiiSnapshotRow => ({
+    country: 'Japan',
+    composite: 62,
+    baselineRisk: 40,
+    eventScore: 75,
+    dynamicScore: 4,
+    trend: 'rising',
+    methodologyVersion: 'cii-core-1',
+    componentsJson: JSON.stringify([
+      { key: 'conflict', score: 80, signalPresent: true, weight: 0.25, sources: ['events:conflict'] },
+      { key: 'economic', score: 30, signalPresent: true, weight: 0.30, sources: ['signals:economic'] },
+    ]),
+    capturedAt: NOW,
+    ...over,
+  });
+
+  test('devuelve "" si la lista está vacía (serie nueva)', () => {
+    assert.equal(buildRiskContext([]), '');
+  });
+
+  test('incluye país, composite, movimiento y componente dominante', () => {
+    const result = buildRiskContext([ciiRow()]);
+    assert.ok(result.includes('Japan'), 'incluye país');
+    assert.ok(result.includes('CII 62'), 'incluye composite redondeado');
+    assert.ok(result.includes('rising'), 'incluye trend');
+    assert.ok(result.includes('+4'), 'incluye dynamicScore con signo');
+    assert.ok(result.includes('dominante: conflict'), 'dominante = mayor score (conflict 80)');
+  });
+
+  test('ordena por composite desc y omite movimiento en serie nueva (dynamic null)', () => {
+    const result = buildRiskContext([
+      ciiRow({ country: 'Chile', composite: 30, dynamicScore: null, trend: null }),
+      ciiRow({ country: 'Germany', composite: 70 }),
+    ]);
+    const idxG = result.indexOf('Germany');
+    const idxC = result.indexOf('Chile');
+    assert.ok(idxG < idxC, 'Germany (70) antes de Chile (30)');
+    // La línea de Chile (dynamic null) no debe llevar paréntesis de movimiento
+    const chileLine = result.split('\n').find((l) => l.includes('Chile'))!;
+    assert.ok(!chileLine.includes('('), 'sin bloque de movimiento si dynamicScore null');
+  });
+
+  test('componentsJson inválido → omite dominante sin romper', () => {
+    const result = buildRiskContext([ciiRow({ componentsJson: 'not-json' })]);
+    assert.ok(result.includes('Japan'), 'la línea se produce igualmente');
+    assert.ok(!result.includes('dominante'), 'sin dominante si el JSON es inválido');
   });
 });
 

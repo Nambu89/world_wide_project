@@ -19,6 +19,8 @@
  *   GET /api/events               (T-12 — list with filters)
  *   GET /api/signals/trend        (T-19 — section trend; more specific, checked first)
  *   GET /api/signals              (T-19 — list with filters)
+ *   GET /api/cii/:country         (T-25 — country CII trend; more specific, checked first)
+ *   GET /api/cii                  (T-25 — latest CII snapshot per country + centroids)
  */
 
 import * as http from 'node:http';
@@ -34,8 +36,11 @@ import {
   getEvent,
   getSignals,
   getSignalTrend,
+  getLatestCii,
+  getCiiTrend,
 } from '@www/store';
-import type { EventFilter, Section } from '@www/store';
+import type { EventFilter, Section, CiiSnapshotRow } from '@www/store';
+import { COUNTRY_CENTROIDS } from './packages/connectors/geo/country-centroids.js';
 import { createScheduler, defaultJobs } from '@www/scheduler';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -399,6 +404,42 @@ async function route(
 
     const signals = await getSignals(signalOpts);
     sendJson(res, 200, signals);
+    return;
+  }
+
+  // ── /api/cii/:country ─────────────────────────────────────────────────────
+  // T-25 — SOLO-LECTURA. More specific pattern — checked BEFORE /api/cii (list).
+  // Returns CiiSnapshotRow[] trend for the given country (camelCase, no transform).
+  // NEVER fires the CII engine on-request (D-212/ADR-004).
+  const ciiTrendMatch = pathname.match(/^\/api\/cii\/([^/]+)$/);
+  if (ciiTrendMatch) {
+    const country = decodeURIComponent(ciiTrendMatch[1] ?? '');
+    const sinceParam = url.searchParams.get('since');
+    const sinceMs = sinceParam
+      ? Number(sinceParam)
+      : Date.now() - 30 * 24 * 60 * 60 * 1000; // default: last 30 days
+
+    // Country without data → [] (never 500)
+    const trend = await getCiiTrend(country, sinceMs);
+    sendJson(res, 200, trend);
+    return;
+  }
+
+  // ── /api/cii ──────────────────────────────────────────────────────────────
+  // T-25 — SOLO-LECTURA. Returns latest CII snapshot per country with lat/lon
+  // from COUNTRY_CENTROIDS lookup. Countries without a centroid get lat/lon null
+  // (shown in panel only, not on map). Never fires CII engine on-request (D-212/ADR-004).
+  if (pathname === '/api/cii') {
+    const rows = await getLatestCii();
+    const payload = rows.map((row: CiiSnapshotRow) => {
+      const centroid = COUNTRY_CENTROIDS[row.country];
+      return {
+        ...row,
+        lat: centroid !== undefined ? centroid.lat : null,
+        lon: centroid !== undefined ? centroid.lon : null,
+      };
+    });
+    sendJson(res, 200, payload);
     return;
   }
 

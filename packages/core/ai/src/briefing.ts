@@ -20,10 +20,12 @@ import {
   saveBriefing,
   getLatestMarkets,
   getEvents,
+  getLatestCii,
   migrate,
   type MarketSnapshot,
   type EventRow,
   type EventFilter,
+  type CiiSnapshotRow,
   type Briefing,
 } from '@www/store';
 import { complete, pickProvider } from './router.js';
@@ -71,6 +73,55 @@ export function buildGlobalRiskContext(events: EventRow[]): string {
   return [`Riesgo global (top ${top.length} eventos, todas las fuentes):`, ...lines].join('\n');
 }
 
+// ─── CII risk context (T-27) ──────────────────────────────────────────────────
+
+const CII_TOP_N = 8;
+
+/**
+ * Construye un bloque de texto con los top-N países por CII (composite) más alto,
+ * su movimiento de 24h (dynamicScore/trend) y el componente dominante.
+ *
+ * El componente dominante se deriva parseando componentsJson (CiiComponent[]) y
+ * tomando el de mayor score; si el parseo falla, se omite el dominante de esa línea.
+ *
+ * Formato por línea (ej.):
+ *   - Japan: CII 62 (↑+4 rising) — dominante: conflict
+ *
+ * @returns '' si la lista está vacía (serie nueva → el bloque se omite). D-005/D-202.
+ */
+export function buildRiskContext(latest: CiiSnapshotRow[]): string {
+  if (latest.length === 0) return '';
+
+  const sorted = [...latest].sort((a, b) => b.composite - a.composite);
+  const top = sorted.slice(0, CII_TOP_N);
+
+  const lines = top.map((c) => {
+    // Movimiento de 24h: flecha + delta + trend (omitido si serie nueva)
+    let move = '';
+    if (c.dynamicScore != null && c.trend != null) {
+      const arrow = c.trend === 'rising' ? '↑' : c.trend === 'falling' ? '↓' : '→';
+      const sign = c.dynamicScore >= 0 ? '+' : '';
+      move = ` (${arrow}${sign}${c.dynamicScore.toFixed(0)} ${c.trend})`;
+    }
+
+    // Componente dominante (mayor score) desde componentsJson
+    let dominant = '';
+    try {
+      const components = JSON.parse(c.componentsJson) as Array<{ key: string; score: number }>;
+      if (Array.isArray(components) && components.length > 0) {
+        const best = components.reduce((a, b) => (b.score > a.score ? b : a));
+        dominant = ` — dominante: ${best.key}`;
+      }
+    } catch {
+      // componentsJson inválido → omite el dominante (no rompe la línea)
+    }
+
+    return `  - ${c.country}: CII ${c.composite.toFixed(0)}${move}${dominant}`;
+  });
+
+  return [`Riesgo por país (top ${top.length} por CII):`, ...lines].join('\n');
+}
+
 // ─── Context serialization ────────────────────────────────────────────────────
 
 /**
@@ -83,8 +134,13 @@ export function buildGlobalRiskContext(events: EventRow[]): string {
  *
  * @param latest  - snapshots de mercado más recientes (de getLatestMarkets)
  * @param events  - eventos globales recientes de la tabla events (de getEvents)
+ * @param cii     - últimos snapshots CII por país (de getLatestCii); T-27, opcional
  */
-export function serializeContext(latest: MarketSnapshot[], events: EventRow[]): string {
+export function serializeContext(
+  latest: MarketSnapshot[],
+  events: EventRow[],
+  cii: CiiSnapshotRow[] = [],
+): string {
   const now = new Date().toISOString();
   const lines: string[] = [`Fecha de generación: ${now}`];
 
@@ -106,6 +162,12 @@ export function serializeContext(latest: MarketSnapshot[], events: EventRow[]): 
     lines.push(riskBlock);
   } else {
     lines.push('Riesgo global: sin eventos recientes en la base de datos local.');
+  }
+
+  // Riesgo por país (CII) — T-27. Se omite si la serie CII está vacía (serie nueva).
+  const ciiBlock = buildRiskContext(cii);
+  if (ciiBlock !== '') {
+    lines.push(ciiBlock);
   }
 
   return lines.join('\n');
@@ -153,6 +215,7 @@ export async function generateDailyBriefing(): Promise<Briefing> {
   // 2. Sin caché válida: leer contexto del store
   let latest: MarketSnapshot[] = [];
   let events: EventRow[] = [];
+  let cii: CiiSnapshotRow[] = [];
 
   try {
     latest = await getLatestMarkets();
@@ -163,13 +226,17 @@ export async function generateDailyBriefing(): Promise<Briefing> {
       ...EVENTS_FILTER,
       sinceMs: now - 48 * 60 * 60 * 1000, // 48h
     });
+    // CII por país (T-27): último snapshot por país. El job `cii` (tier medium)
+    // lo popula; aquí solo leemos (D-105). Vacío → el bloque se omite (serie nueva).
+    cii = await getLatestCii();
   } catch {
     // Si el store falla, degradamos con contexto vacío
     latest = [];
     events = [];
+    cii = [];
   }
 
-  const ctx = serializeContext(latest, events);
+  const ctx = serializeContext(latest, events, cii);
   const prompt = buildBriefingPrompt(ctx);
 
   // 3. Generación LLM con degradación (R-2)

@@ -430,8 +430,65 @@ export const SIGNAL_LAYERS: LayerSpec[] = [
   },
 ];
 
-/** All unique source ids needed by LAYERS + SIGNAL_LAYERS */
-export const LAYER_SOURCES = [...new Set([...LAYERS, ...SIGNAL_LAYERS].map((l) => l.source))];
+// ---------------------------------------------------------------------------
+// CII_LAYERS — Country Instability Index choropleth circles (T-26)
+//
+// Source: 'cii-countries' (GeoJSON; 1 Feature per country with centroid lat/lon).
+// Color bands (composite 0-100):
+//   0-24  low      → teal/green
+//  25-49  moderate → amber
+//  50-69  elevated → orange
+//  70-100 high     → red
+// Radius driven by composite score.
+// ---------------------------------------------------------------------------
 
-/** All unique toggle keys (events + signals) */
-export const TOGGLE_KEYS = [...new Set([...LAYERS, ...SIGNAL_LAYERS].map((l) => l.toggleKey))];
+/** Step expression for CII composite → circle color by band */
+const CII_COLOR_STEP = [
+  'step',
+  ['get', 'composite'],
+  '#22c55e',   // 0-24: low — {colors.success} teal
+  25, '#f59e0b', // 25-49: moderate — {colors.warning} amber
+  50, '#f97316', // 50-69: elevated — orange
+  70, '#ef4444', // 70-100: high — {colors.danger} red
+];
+
+/** Circle radius ramp: composite 0..100 → 6px..18px (zoom-aware) */
+const CII_RADIUS = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  2, ['interpolate', ['linear'], ['get', 'composite'], 0, 3, 100, 8],
+  8, ['interpolate', ['linear'], ['get', 'composite'], 0, 6, 100, 18],
+];
+
+export const CII_LAYERS: LayerSpec[] = [
+  // =====================================================================
+  // CII per-country — circles at country centroid, color by band
+  // Attribution: CII propio · datos: USGS/NASA EONET/GDELT/GKG
+  // =====================================================================
+  {
+    id: 'cii-countries',
+    source: 'cii-countries',
+    type: 'circle',
+    label: 'Country Risk (CII)',
+    toggleKey: 'cii',
+    visibleWhen: (active) => active.has('cii'),
+    paint: {
+      'circle-color': CII_COLOR_STEP,
+      'circle-radius': CII_RADIUS,
+      'circle-opacity': 0.80,
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': 'rgba(255,255,255,0.20)',
+    },
+  },
+];
+
+/** All unique source ids needed by LAYERS + SIGNAL_LAYERS + CII_LAYERS */
+export const LAYER_SOURCES = [
+  ...new Set([...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS].map((l) => l.source)),
+];
+
+/** All unique toggle keys (events + signals + cii) */
+export const TOGGLE_KEYS = [
+  ...new Set([...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS].map((l) => l.toggleKey)),
+];

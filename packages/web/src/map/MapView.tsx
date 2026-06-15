@@ -14,11 +14,20 @@
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
-import { LAYERS, SIGNAL_LAYERS, LAYER_SOURCES } from './layers.config';
-import { getEvents, getSignals, type GlobalEvent, type RadarSignal } from '../api/client';
+import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, LAYER_SOURCES } from './layers.config';
+import {
+  getEvents,
+  getSignals,
+  getCii,
+  type GlobalEvent,
+  type RadarSignal,
+  type CiiCountry,
+} from '../api/client';
 
 interface Props {
   activeLayers: Set<string>;
+  /** Country selected in RiskPanel — map centers on it when set (declarative tie). */
+  activeCountry?: string | null;
 }
 
 /** Convert GlobalEvent array to a GeoJSON FeatureCollection for the 'events' source. */
@@ -83,6 +92,33 @@ function signalsToGeoJSON(signals: RadarSignal[]): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features };
 }
 
+/**
+ * Convert CiiCountry array to GeoJSON for the 'cii-countries' source (T-26).
+ * Only countries WITH lat/lon emit a feature (others are panel-only).
+ * Properties exposed to MapLibre: composite, country, dominantComponent (key string).
+ */
+function ciiToGeoJSON(countries: CiiCountry[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const c of countries) {
+    if (c.lat == null || c.lon == null) continue; // no centroid — panel only
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [c.lon, c.lat],
+      },
+      properties: {
+        country: c.country,
+        composite: c.composite,
+        band: c.band,
+        trend: c.trend ?? 'stable',
+        dominantComponent: c.dominantComponent?.key ?? '',
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
 /** Empty GeoJSON for initial source registration */
 const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
   type: 'FeatureCollection',
@@ -95,10 +131,12 @@ for (const id of LAYER_SOURCES) {
   SOURCE_INITIAL_DATA[id] = EMPTY_GEOJSON;
 }
 
-export default function MapView({ activeLayers }: Props) {
+export default function MapView({ activeLayers, activeCountry }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const mapReadyRef = useRef(false);
+  /** Store latest CII data so we can center map when activeCountry changes */
+  const ciiDataRef = useRef<CiiCountry[]>([]);
 
   // Initialize map once
   useEffect(() => {
@@ -150,8 +188,8 @@ export default function MapView({ activeLayers }: Props) {
         }
       }
 
-      // Add all layers by iterating LAYERS + SIGNAL_LAYERS — NEVER add layers outside this loop
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS]) {
+      // Add all layers by iterating LAYERS + SIGNAL_LAYERS + CII_LAYERS — NEVER add layers outside this loop
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS]) {
         if (map.getLayer(spec.id)) continue;
 
         // Build a plain object and cast to LayerSpecification at the call site.
@@ -196,7 +234,7 @@ export default function MapView({ activeLayers }: Props) {
 
     const apply = () => {
       if (!mapReadyRef.current) return;
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS]) {
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS]) {
         if (!map.getLayer(spec.id)) continue;
         const visible = spec.visibleWhen(activeLayers);
         map.setLayoutProperty(spec.id, 'visibility', visible ? 'visible' : 'none');
@@ -290,6 +328,66 @@ export default function MapView({ activeLayers }: Props) {
       cancelled = true;
     };
   }, []);
+
+  // Load CII data from /api/cii and inject into the 'cii-countries' source (T-26).
+  // One useEffect per data type — mirrors the events/signals pattern.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const countries = await getCii();
+        if (cancelled) return;
+
+        ciiDataRef.current = countries;
+
+        const injectData = () => {
+          if (!map || !mapReadyRef.current) return;
+          const source = map.getSource('cii-countries') as GeoJSONSource | undefined;
+          if (source) {
+            source.setData(ciiToGeoJSON(countries));
+          }
+        };
+
+        if (mapReadyRef.current) {
+          injectData();
+        } else {
+          map.once('load', injectData);
+        }
+      } catch {
+        // Graceful: upstream failure leaves source as empty GeoJSON (no crash).
+        // RiskPanel shows its own error state independently via its own fetch.
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Map-tie: when activeCountry changes (from RiskPanel selection), fly to that country.
+  // Uses ciiDataRef to find the centroid — purely declarative React state, no imperative add.
+  useEffect(() => {
+    if (!activeCountry) return;
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return;
+
+    const country = ciiDataRef.current.find(
+      (c) => c.country === activeCountry && c.lat != null && c.lon != null
+    );
+    if (!country || country.lat == null || country.lon == null) return;
+
+    map.flyTo({
+      center: [country.lon, country.lat],
+      zoom: 4,
+      duration: 800,
+    });
+  }, [activeCountry]);
 
   return (
     <div

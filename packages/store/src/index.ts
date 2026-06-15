@@ -6,10 +6,10 @@
 import type { Client as LibsqlClient } from '@libsql/client';
 import { getDb, _resetDbForTesting } from './db.js';
 import { migrate as runMigrations } from './migrate.js';
-import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section } from './types.js';
+import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow } from './types.js';
 
 // Re-export types so consumers don't need a separate import
-export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section } from './types.js';
+export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow } from './types.js';
 
 // ─── DB singleton ────────────────────────────────────────────────────────────
 
@@ -629,6 +629,116 @@ export async function purgeAndDownsample(beforeMs: number): Promise<void> {
     sql: 'DELETE FROM signals WHERE COALESCE(occurred_at, captured_at) < ?',
     args: [beforeMs],
   });
+
+  // Step 6 — Purge cii_snapshots older than beforeMs (T-21).
+  await client.execute({
+    sql: 'DELETE FROM cii_snapshots WHERE captured_at < ?',
+    args: [beforeMs],
+  });
+}
+
+// ─── CII Snapshots API (T-21) ─────────────────────────────────────────────────
+
+/**
+ * Appends CII snapshot rows — INSERT only (no upsert; cii_snapshots is a time-series).
+ * Caller is responsible for computing dynamicScore and trend before calling.
+ * No-op for empty arrays.
+ */
+export async function insertCiiSnapshots(rows: CiiSnapshotRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const client = getDb();
+  for (const row of rows) {
+    await client.execute({
+      sql: `INSERT INTO cii_snapshots
+              (country, composite, baseline_risk, event_score, dynamic_score,
+               trend, methodology_version, components_json, captured_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        row.country,
+        row.composite,
+        row.baselineRisk,
+        row.eventScore,
+        row.dynamicScore ?? null,
+        row.trend ?? null,
+        row.methodologyVersion,
+        row.componentsJson,
+        row.capturedAt,
+      ],
+    });
+  }
+}
+
+/**
+ * Returns the most recent CII snapshot per country (1 row per country, MAX captured_at).
+ * UI reads this for the current country-risk layer — never upstream (ADR-004/D-003).
+ */
+export async function getLatestCii(): Promise<CiiSnapshotRow[]> {
+  const client = getDb();
+  const result = await client.execute(`
+    SELECT c.*
+    FROM cii_snapshots c
+    INNER JOIN (
+      SELECT country, MAX(captured_at) AS max_ts
+      FROM cii_snapshots
+      GROUP BY country
+    ) latest ON c.country = latest.country AND c.captured_at = latest.max_ts
+    ORDER BY c.country
+  `);
+  return result.rows.map(rowToCiiSnapshotRow);
+}
+
+/**
+ * Returns time-series CII snapshots for a country with captured_at >= sinceMs, ASC.
+ * Used for trend charts in the UI.
+ */
+export async function getCiiTrend(country: string, sinceMs: number): Promise<CiiSnapshotRow[]> {
+  const client = getDb();
+  const result = await client.execute({
+    sql: `SELECT * FROM cii_snapshots
+          WHERE country = ? AND captured_at >= ?
+          ORDER BY captured_at ASC`,
+    args: [country, sinceMs],
+  });
+  return result.rows.map(rowToCiiSnapshotRow);
+}
+
+/**
+ * Returns the CII snapshot for a country closest to (and at or before) aroundMs.
+ * Used to compute dynamicScore (~24h prior snapshot for delta calculation).
+ * Returns null if no snapshot exists for that country.
+ */
+export async function getPriorCii(country: string, aroundMs: number): Promise<CiiSnapshotRow | null> {
+  const client = getDb();
+  const result = await client.execute({
+    sql: `SELECT * FROM cii_snapshots
+          WHERE country = ? AND captured_at <= ?
+          ORDER BY captured_at DESC
+          LIMIT 1`,
+    args: [country, aroundMs],
+  });
+  if (result.rows.length === 0) return null;
+  const r = result.rows[0];
+  if (r === undefined) return null;
+  return rowToCiiSnapshotRow(r);
+}
+
+function rowToCiiSnapshotRow(r: Record<string, unknown>): CiiSnapshotRow {
+  const trend = r['trend'];
+  const base: CiiSnapshotRow = {
+    country: String(r['country']),
+    composite: Number(r['composite']),
+    baselineRisk: Number(r['baseline_risk']),
+    eventScore: Number(r['event_score']),
+    dynamicScore: r['dynamic_score'] != null ? Number(r['dynamic_score']) : null,
+    trend: trend === 'rising' || trend === 'falling' || trend === 'stable' ? trend : null,
+    methodologyVersion: String(r['methodology_version']),
+    componentsJson: String(r['components_json']),
+    capturedAt: Number(r['captured_at']),
+  };
+  if (r['id'] != null) {
+    base.id = Number(r['id']);
+  }
+  return base;
 }
 
 // Re-export LibsqlClient type for consumers that need it

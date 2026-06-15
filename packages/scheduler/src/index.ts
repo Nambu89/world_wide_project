@@ -1,6 +1,7 @@
 // packages/scheduler/src/index.ts
 // @www/scheduler — T-11 implementation (Wave C, Fase 2 global-events)
 //                  T-18: gkg job (medium tier) — signals pipeline
+//                  T-24: cii job (medium tier) — CII scoring pipeline
 //
 // ADR-004/D-003: scheduler server-side; fetch connector → persist in store BEFORE serving.
 // D-105: 4 tiers by volatility. Intervals are CONFIGURABLE (passed via cfg / Job.intervalMs),
@@ -18,21 +19,31 @@
 //   - loadDefaultConnectors: adds fetchGkg.
 //   - defaultJobs: adds gkg (medium) job after gdelt.
 //   - Return order: [markets, usgs, eonet, gdelt, gkg, news, daily].
+// T-24 changes:
+//   - SchedulerDeps: adds computeAllCountries, getPriorCii, insertCiiSnapshots.
+//   - REAL_STORE_AI_DEPS: adds getPriorCii + insertCiiSnapshots.
+//   - defaultJobs: adds cii (medium) job after gkg.
+//   - Return order: [markets, usgs, eonet, gdelt, gkg, cii, news, daily].
 
 import {
   insertMarketSnapshots,
   insertNewsItems,
   upsertEvents,
   upsertSignals,
+  insertCiiSnapshots,
+  getPriorCii,
   purgeAndDownsample,
   type MarketSnapshot,
   type NewsItem,
   type EventRow,
   type SignalRow,
+  type CiiSnapshotRow,
 } from '@www/store';
 
 import { generateDailyBriefing } from '@www/core-ai';
 import type { Briefing } from '@www/store';
+
+import { computeAllCountries, computeDynamic, type CiiScore } from '@www/core-cii';
 
 // ─── ConnectorResult contract ─────────────────────────────────────────────────
 // Mirrors the structural type exported by @www/connectors (finance/markets.ts).
@@ -151,6 +162,7 @@ const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
  * ConnectorResult<EventRow>) and upsertEvents from @www/store.
  * insertGdeltEvents is removed — gdelt_events table was DROPped in migration 002.
  * T-18: adds fetchGkg (ConnectorResult<SignalRow>) + upsertSignals.
+ * T-24: adds computeAllCountries (@www/core-cii), getPriorCii + insertCiiSnapshots (@www/store).
  */
 export interface SchedulerDeps {
   // Connector fetchers
@@ -162,11 +174,16 @@ export interface SchedulerDeps {
   fetchNews:    () => Promise<ConnectorResult<NewsItem>>;
 
   // Store writes (@www/store) — defaults to real implementations
-  insertMarketSnapshots: (rows: MarketSnapshot[]) => Promise<void>;
-  upsertEvents:          (rows: EventRow[])        => Promise<void>;
-  upsertSignals:         (rows: SignalRow[])        => Promise<void>;
-  insertNewsItems:       (rows: NewsItem[])         => Promise<void>;
-  purgeAndDownsample:    (beforeMs: number)         => Promise<void>;
+  insertMarketSnapshots: (rows: MarketSnapshot[])    => Promise<void>;
+  upsertEvents:          (rows: EventRow[])           => Promise<void>;
+  upsertSignals:         (rows: SignalRow[])           => Promise<void>;
+  insertNewsItems:       (rows: NewsItem[])            => Promise<void>;
+  purgeAndDownsample:    (beforeMs: number)            => Promise<void>;
+
+  // CII pipeline (@www/core-cii + @www/store) — T-24
+  computeAllCountries: (nowMs: number) => Promise<CiiScore[]>;
+  getPriorCii:         (country: string, aroundMs: number) => Promise<CiiSnapshotRow | null>;
+  insertCiiSnapshots:  (rows: CiiSnapshotRow[]) => Promise<void>;
 
   // AI pipeline (@www/core-ai) — defaults to real implementation
   generateDailyBriefing: () => Promise<Briefing>;
@@ -182,6 +199,7 @@ export type ConnectorDeps = Pick<
  * Real (production) implementations of store + ai deps.
  * insertGdeltEvents intentionally omitted — no longer in SchedulerDeps (T-11).
  * T-18: upsertSignals added.
+ * T-24: computeAllCountries + getPriorCii + insertCiiSnapshots added.
  */
 const REAL_STORE_AI_DEPS: Pick<
   SchedulerDeps,
@@ -190,6 +208,9 @@ const REAL_STORE_AI_DEPS: Pick<
   | 'upsertSignals'
   | 'insertNewsItems'
   | 'purgeAndDownsample'
+  | 'computeAllCountries'
+  | 'getPriorCii'
+  | 'insertCiiSnapshots'
   | 'generateDailyBriefing'
 > = {
   insertMarketSnapshots,
@@ -197,6 +218,9 @@ const REAL_STORE_AI_DEPS: Pick<
   upsertSignals,
   insertNewsItems,
   purgeAndDownsample,
+  computeAllCountries,
+  getPriorCii,
+  insertCiiSnapshots,
   generateDailyBriefing,
 };
 
@@ -222,13 +246,15 @@ async function loadDefaultConnectors(): Promise<ConnectorDeps> {
 
 /**
  * Builds the production jobs:
- *   markets (fast) · usgs (fast) · eonet (medium) · gdelt (medium) · gkg (medium) · news (slow) · daily
+ *   markets (fast) · usgs (fast) · eonet (medium) · gdelt (medium) · gkg (medium) · cii (medium) · news (slow) · daily
  *
  * T-11: gdelt-financial job (insertGdeltEvents → gdelt_events) REPLACED by gdelt-events
  * job (upsertEvents → events). usgs + eonet jobs ADDED. Order: [markets, usgs, eonet,
  * gdelt, news, daily]. Mantiene la firma defaultJobs(cfg?, deps?): Job[] que usa server.ts.
  * T-18: gkg job (medium tier, upsertSignals) ADDED after gdelt.
  * Order: [markets, usgs, eonet, gdelt, gkg, news, daily].
+ * T-24: cii job (medium tier, insertCiiSnapshots) ADDED after gkg (D-211).
+ * Order: [markets, usgs, eonet, gdelt, gkg, cii, news, daily].
  *
  * @param cfg  - override any tier's interval in ms.
  * @param deps - inject mocks for testing (optional; defaults load from @www/connectors + real store/ai).
@@ -361,6 +387,64 @@ export function defaultJobs(
     },
   };
 
+  // ── cii job (medium tier) — T-24: CII scoring pipeline ───────────────────
+  // D-211: tier medium (same as gkg/gdelt). Reads store internally via computeAllCountries.
+  // ADR-004/D-002: persist snapshots BEFORE serving — insertCiiSnapshots before any read.
+  const ciiJob: Job = {
+    name: 'cii',
+    tier: 'medium',
+    intervalMs: intervals.medium,
+    async run() {
+      const now = Date.now();
+
+      // computeAllCountries reads @www/store internally (getEventsByCountry + getSignals).
+      // Inject via deps for testability; fall back to real implementation.
+      const allScores = await (deps?.computeAllCountries ?? storeAi.computeAllCountries)(now);
+
+      if (allScores.length === 0) {
+        console.warn('[scheduler] cii: computeAllCountries returned 0 scores — skipping insert');
+        return;
+      }
+
+      // Build CiiSnapshotRow[] — one per country.
+      // getPriorCii returns CiiSnapshotRow|null; computeDynamic needs CiiScore|null.
+      // Only composite is consumed by computeDynamic, so we construct a minimal adapter.
+      const rows: CiiSnapshotRow[] = [];
+      for (const s of allScores) {
+        const priorRow = await storeAi.getPriorCii(s.country, now - 24 * 3600 * 1000);
+        // Adapt CiiSnapshotRow → minimal CiiScore shape for computeDynamic
+        const priorScore: CiiScore | null = priorRow
+          ? {
+              country:            priorRow.country,
+              composite:          priorRow.composite,
+              baselineRisk:       priorRow.baselineRisk,
+              eventScore:         priorRow.eventScore,
+              components:         [],
+              methodologyVersion: priorRow.methodologyVersion,
+              capturedAt:         priorRow.capturedAt,
+            }
+          : null;
+
+        const dyn = computeDynamic(s, priorScore);
+
+        rows.push({
+          country:            s.country,
+          composite:          s.composite,
+          baselineRisk:       s.baselineRisk,
+          eventScore:         s.eventScore,
+          dynamicScore:       dyn.dynamicScore,
+          trend:              dyn.trend,
+          methodologyVersion: s.methodologyVersion,
+          componentsJson:     JSON.stringify(s.components),
+          capturedAt:         s.capturedAt,
+        });
+      }
+
+      await storeAi.insertCiiSnapshots(rows);
+      console.log(`[scheduler] cii: persisted ${rows.length} CII snapshots`);
+    },
+  };
+
   // ── news job (slow tier) ──────────────────────────────────────────────────
   const newsJob: Job = {
     name: 'news',
@@ -410,5 +494,6 @@ export function defaultJobs(
 
   // T-11 order: markets · usgs · eonet · gdelt · news · daily
   // T-18 order: markets · usgs · eonet · gdelt · gkg · news · daily
-  return [marketsJob, usgsJob, eonetJob, gdeltJob, gkgJob, newsJob, dailyJob];
+  // T-24 order: markets · usgs · eonet · gdelt · gkg · cii · news · daily
+  return [marketsJob, usgsJob, eonetJob, gdeltJob, gkgJob, ciiJob, newsJob, dailyJob];
 }

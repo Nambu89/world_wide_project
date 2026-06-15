@@ -1,5 +1,5 @@
 {
-  "name": "@www/scheduler",
+  "name": "@www/core-cii",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -16,9 +16,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@www/store": "workspace:*",
-    "@www/connectors": "workspace:*",
-    "@www/core-ai": "workspace:*",
-    "@www/core-cii": "workspace:*"
+    "@www/store": "workspace:*"
   }
 }

@@ -137,3 +137,30 @@ export interface MarketDaily {
   low: number | null;
   close: number | null;
 }
+
+// ─── CII Snapshots (T-21, ADR-CII) ───────────────────────────────────────────
+
+/**
+ * Country Instability Index snapshot row — camelCase (L-1: web wire is camelCase).
+ * Persisted as a time-series append in `cii_snapshots` (migration 004).
+ * composite: 0..100 combined score.
+ * baselineRisk: static/slow-moving structural risk component.
+ * eventScore: dynamic component derived from recent events.
+ * dynamicScore: optional ~24h delta vs prior snapshot; null if no prior exists.
+ * trend: 'rising'|'falling'|'stable'|null — computed from dynamicScore or prior diff.
+ * methodologyVersion: semver string identifying the scoring formula version.
+ * componentsJson: JSON-serialized breakdown of sub-scores for audit/debug.
+ * capturedAt: epoch ms of the scheduler snapshot.
+ */
+export interface CiiSnapshotRow {
+  id?: number;
+  country: string;
+  composite: number;
+  baselineRisk: number;
+  eventScore: number;
+  dynamicScore: number | null;
+  trend: 'rising' | 'falling' | 'stable' | null;
+  methodologyVersion: string;
+  componentsJson: string;
+  capturedAt: number;
+}

@@ -4,6 +4,7 @@
 // T-11: tests updated to cover usgs(fast)/eonet(medium)/gdelt(medium) jobs
 // that persist via upsertEvents; verify insertGdeltEvents is GONE from all paths.
 // T-18: tests updated to cover gkg(medium) job that persists via upsertSignals.
+// T-24: tests updated to cover cii(medium) job that persists via insertCiiSnapshots.
 //
 // Run via:
 //   node --import tsx --test packages/scheduler/test/scheduler.test.ts
@@ -19,7 +20,8 @@ import {
   type ConnectorResult,
 } from '../src/index.js';
 
-import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section } from '@www/store';
+import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section, CiiSnapshotRow } from '@www/store';
+import type { CiiScore } from '@www/core-cii';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -423,11 +425,11 @@ describe('createScheduler', () => {
 // ─── Test suite: defaultJobs ──────────────────────────────────────────────────
 
 describe('defaultJobs', () => {
-  // T-11: 6 jobs; T-18: now 7 jobs (markets/usgs/eonet/gdelt/gkg/news/daily)
-  it('returns exactly 7 jobs: markets/usgs/eonet/gdelt/gkg/news/daily', () => {
+  // T-11: 6 jobs; T-18: 7 jobs; T-24: now 8 jobs (+cii medium, D-211)
+  it('returns exactly 8 jobs: markets/usgs/eonet/gdelt/gkg/cii/news/daily', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
-    assert.equal(jobs.length, 7, `Expected 7 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
+    assert.equal(jobs.length, 8, `Expected 8 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
 
     const names = jobs.map((j) => j.name);
     assert.ok(names.includes('markets'), 'should include markets job');
@@ -435,6 +437,7 @@ describe('defaultJobs', () => {
     assert.ok(names.includes('eonet'),   'should include eonet job');
     assert.ok(names.includes('gdelt'),   'should include gdelt job');
     assert.ok(names.includes('gkg'),     'should include gkg job');
+    assert.ok(names.includes('cii'),     'should include cii job');
     assert.ok(names.includes('news'),    'should include news job');
     assert.ok(names.includes('daily'),   'should include daily job');
   });
@@ -450,18 +453,19 @@ describe('defaultJobs', () => {
     assert.equal(byName['eonet']?.tier,   'medium', 'eonet must be medium tier (D-105)');
     assert.equal(byName['gdelt']?.tier,   'medium', 'gdelt must be medium tier (D-105)');
     assert.equal(byName['gkg']?.tier,     'medium', 'gkg must be medium tier (D-204)');
+    assert.equal(byName['cii']?.tier,     'medium', 'cii must be medium tier (D-211)');
     assert.equal(byName['markets']?.tier, 'fast',   'markets must be fast tier');
     assert.equal(byName['news']?.tier,    'slow',   'news must be slow tier');
     assert.equal(byName['daily']?.tier,   'daily',  'daily must be daily tier');
   });
 
-  // T-11: return order was [markets, usgs, eonet, gdelt, news, daily]
-  // T-18: return order is [markets, usgs, eonet, gdelt, gkg, news, daily]
-  it('job order is [markets, usgs, eonet, gdelt, gkg, news, daily]', () => {
+  // T-11: [markets, usgs, eonet, gdelt, news, daily]; T-18: +gkg
+  // T-24: return order is [markets, usgs, eonet, gdelt, gkg, cii, news, daily]
+  it('job order is [markets, usgs, eonet, gdelt, gkg, cii, news, daily]', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
     const order = jobs.map((j) => j.name);
-    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'news', 'daily']);
+    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'cii', 'news', 'daily']);
   });
 
   it('uses custom intervals from cfg', () => {

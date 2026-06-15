@@ -16,8 +16,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, _resetDbForTesting } from '@www/store';
-import type { EventRow, SignalRow, SignalTrendPoint } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, _resetDbForTesting } from '@www/store';
+import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow } from '@www/store';
 import { createApp } from './server.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -178,6 +178,57 @@ describe('server.ts integration', () => {
       },
     ];
     await upsertSignals(seedSignals);
+
+    // Seed CII snapshots for T-25 tests (≥2 countries; Japan has centroid, ZZZ does not)
+    const now3 = Date.now();
+    const seedCii: CiiSnapshotRow[] = [
+      {
+        country: 'Japan',
+        composite: 42.5,
+        baselineRisk: 30.0,
+        eventScore: 12.5,
+        dynamicScore: 2.1,
+        trend: 'rising',
+        methodologyVersion: '1.0.0',
+        componentsJson: JSON.stringify({ baseline: 30.0, events: 12.5 }),
+        capturedAt: now3 - 3_600_000,
+      },
+      {
+        country: 'Japan',
+        composite: 44.0,
+        baselineRisk: 30.0,
+        eventScore: 14.0,
+        dynamicScore: 1.5,
+        trend: 'rising',
+        methodologyVersion: '1.0.0',
+        componentsJson: JSON.stringify({ baseline: 30.0, events: 14.0 }),
+        capturedAt: now3 - 1_800_000,
+      },
+      {
+        country: 'Germany',
+        composite: 28.0,
+        baselineRisk: 20.0,
+        eventScore: 8.0,
+        dynamicScore: null,
+        trend: 'stable',
+        methodologyVersion: '1.0.0',
+        componentsJson: JSON.stringify({ baseline: 20.0, events: 8.0 }),
+        capturedAt: now3 - 900_000,
+      },
+      {
+        // Country without centroid — lat/lon must be null in /api/cii response
+        country: 'ZZZ-NoMap',
+        composite: 55.0,
+        baselineRisk: 45.0,
+        eventScore: 10.0,
+        dynamicScore: -1.0,
+        trend: 'falling',
+        methodologyVersion: '1.0.0',
+        componentsJson: JSON.stringify({ baseline: 45.0, events: 10.0 }),
+        capturedAt: now3 - 600_000,
+      },
+    ];
+    await insertCiiSnapshots(seedCii);
 
     // Start server on ephemeral port (no scheduler)
     server = createApp({ startScheduler: false });
@@ -556,6 +607,118 @@ describe('server.ts integration', () => {
   });
 
   it('GET /api/events still 200 after T-19 routes added', async () => {
+    const { status } = await get(server, '/api/events');
+    assert.equal(status, 200);
+  });
+
+  // ── /api/cii (T-25) ───────────────────────────────────────────────────────
+
+  it('GET /api/cii → 200 with latest snapshot per country + centroids', async () => {
+    const { status, body } = await get(server, '/api/cii');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{
+      country: string;
+      composite: number;
+      lat: number | null;
+      lon: number | null;
+    }>;
+    assert.ok(Array.isArray(rows), 'should be an array');
+    // 3 countries seeded: Japan, Germany, ZZZ-NoMap
+    assert.ok(rows.length >= 3, 'should return at least 3 country snapshots');
+    // camelCase wire (L-1)
+    const firstRow = rows[0]!;
+    assert.ok('country' in firstRow, 'should have country');
+    assert.ok('composite' in firstRow, 'should have composite (camelCase)');
+    // lat/lon present on each row (may be null)
+    assert.ok('lat' in firstRow, 'should have lat field');
+    assert.ok('lon' in firstRow, 'should have lon field');
+  });
+
+  it('GET /api/cii → Japan row has non-null lat/lon (known centroid)', async () => {
+    const { status, body } = await get(server, '/api/cii');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; lat: number | null; lon: number | null }>;
+    const japan = rows.find((r) => r.country === 'Japan');
+    assert.ok(japan !== undefined, 'Japan should be present');
+    assert.ok(japan.lat !== null, 'Japan lat should not be null');
+    assert.ok(japan.lon !== null, 'Japan lon should not be null');
+    assert.ok(typeof japan.lat === 'number', 'Japan lat should be a number');
+    assert.ok(typeof japan.lon === 'number', 'Japan lon should be a number');
+  });
+
+  it('GET /api/cii → ZZZ-NoMap row has lat/lon null (no centroid)', async () => {
+    const { status, body } = await get(server, '/api/cii');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; lat: number | null; lon: number | null }>;
+    const noMap = rows.find((r) => r.country === 'ZZZ-NoMap');
+    assert.ok(noMap !== undefined, 'ZZZ-NoMap should be present');
+    assert.equal(noMap.lat, null, 'unknown country lat should be null');
+    assert.equal(noMap.lon, null, 'unknown country lon should be null');
+  });
+
+  it('GET /api/cii → returns only latest snapshot per country (not all rows)', async () => {
+    // Japan has 2 snapshots; only the most recent (composite=44.0) should appear
+    const { status, body } = await get(server, '/api/cii');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; composite: number }>;
+    const japanRows = rows.filter((r) => r.country === 'Japan');
+    assert.equal(japanRows.length, 1, 'only 1 Japan row (latest) should appear');
+    assert.equal(japanRows[0]!.composite, 44.0, 'latest Japan composite should be 44.0');
+  });
+
+  // ── /api/cii/:country (T-25) ──────────────────────────────────────────────
+
+  it('GET /api/cii/Japan → 200 with CII trend for Japan', async () => {
+    const since = Date.now() - 24 * 60 * 60 * 1000; // 1 day ago — covers seeded rows
+    const { status, body } = await get(server, `/api/cii/Japan?since=${since}`);
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; composite: number; capturedAt: number }>;
+    assert.ok(Array.isArray(rows), 'should be an array');
+    assert.ok(rows.length >= 2, 'Japan should have 2 seeded trend rows');
+    assert.ok(rows.every((r) => r.country === 'Japan'), 'all rows should be Japan');
+    // rows returned ASC by capturedAt
+    assert.ok(rows[0]!.capturedAt <= rows[rows.length - 1]!.capturedAt, 'should be sorted ASC by capturedAt');
+  });
+
+  it('GET /api/cii/Germany → 200 with CII trend for Germany', async () => {
+    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const { status, body } = await get(server, `/api/cii/Germany?since=${since}`);
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; trend: string | null }>;
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.length >= 1, 'Germany should have 1 trend row');
+    assert.equal(rows[0]!.country, 'Germany');
+    assert.equal(rows[0]!.trend, 'stable');
+  });
+
+  it('GET /api/cii/Unknown-Country → 200 with empty array (no data, never 500)', async () => {
+    const { status, body } = await get(server, '/api/cii/Unknown-Country');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as unknown[];
+    assert.ok(Array.isArray(rows), 'should be an array');
+    assert.equal(rows.length, 0, 'unknown country should return empty array, not 500');
+  });
+
+  it('GET /api/cii/:country is checked BEFORE /api/cii (routing order)', async () => {
+    // If /api/cii matched first for /api/cii/Japan, it would 404.
+    // A 200 here proves the :country route is checked first.
+    const { status } = await get(server, '/api/cii/Japan');
+    assert.equal(status, 200);
+  });
+
+  // ── Regression guard: previous endpoints still green after T-25 ──────────
+
+  it('GET /api/health still 200 after T-25 routes added', async () => {
+    const { status } = await get(server, '/api/health');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/signals still 200 after T-25 routes added', async () => {
+    const { status } = await get(server, '/api/signals');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/events still 200 after T-25 routes added', async () => {
     const { status } = await get(server, '/api/events');
     assert.equal(status, 200);
   });
