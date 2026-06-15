@@ -21,11 +21,13 @@ import {
   getLatestMarkets,
   getEvents,
   getLatestCii,
+  getLatestConvergence,
   migrate,
   type MarketSnapshot,
   type EventRow,
   type EventFilter,
   type CiiSnapshotRow,
+  type ConvergenceSignalRow,
   type Briefing,
 } from '@www/store';
 import { complete, pickProvider } from './router.js';
@@ -122,6 +124,55 @@ export function buildRiskContext(latest: CiiSnapshotRow[]): string {
   return [`Riesgo por país (top ${top.length} por CII):`, ...lines].join('\n');
 }
 
+// ─── Convergence context (T-32) ───────────────────────────────────────────────
+
+const CONV_TOP_N = 8;
+
+/**
+ * Construye un bloque de texto con las top-N señales de convergencia activas
+ * ordenadas por strength descendente.
+ *
+ * Formato por línea (ej.):
+ *   - Japan (conflict+economic, strength 0.82, ↑)
+ *
+ * La flecha refleja el dynamicScore: ↑ si >0, ↓ si <0, → si =0 o null.
+ * Las familias se leen de familiesJson (array de strings); si el parseo falla
+ * se omite la lista de familias pero la línea se produce igualmente.
+ *
+ * @returns '' si la lista está vacía (el bloque se omite en serializeContext). D-311.
+ */
+export function buildConvergenceContext(latest: ConvergenceSignalRow[]): string {
+  if (latest.length === 0) return '';
+
+  const sorted = [...latest].sort((a, b) => b.strength - a.strength);
+  const top = sorted.slice(0, CONV_TOP_N);
+
+  const lines = top.map((c) => {
+    // Familias desde familiesJson
+    let familiesPart = '';
+    try {
+      const families = JSON.parse(c.familiesJson) as string[];
+      if (Array.isArray(families) && families.length > 0) {
+        familiesPart = families.join('+');
+      }
+    } catch {
+      // JSON inválido → omite familias pero no rompe
+    }
+
+    // Flecha según dynamicScore
+    let arrow = '→';
+    if (c.dynamicScore != null) {
+      if (c.dynamicScore > 0) arrow = '↑';
+      else if (c.dynamicScore < 0) arrow = '↓';
+    }
+
+    const familiesLabel = familiesPart ? `${familiesPart}, ` : '';
+    return `  - ${c.country} (${familiesLabel}strength ${c.strength.toFixed(2)}, ${arrow})`;
+  });
+
+  return [`Señales de convergencia activas (top ${top.length}):`, ...lines].join('\n');
+}
+
 // ─── Context serialization ────────────────────────────────────────────────────
 
 /**
@@ -132,14 +183,16 @@ export function buildRiskContext(latest: CiiSnapshotRow[]): string {
  * unificada cubre todas las fuentes (GDELT conflict, USGS earthquake, EONET natural).
  * El bloque GDELT-financiero legacy se reemplaza por buildGlobalRiskContext(events).
  *
- * @param latest  - snapshots de mercado más recientes (de getLatestMarkets)
- * @param events  - eventos globales recientes de la tabla events (de getEvents)
- * @param cii     - últimos snapshots CII por país (de getLatestCii); T-27, opcional
+ * @param latest       - snapshots de mercado más recientes (de getLatestMarkets)
+ * @param events       - eventos globales recientes de la tabla events (de getEvents)
+ * @param cii          - últimos snapshots CII por país (de getLatestCii); T-27, opcional
+ * @param convergence  - señales de convergencia activas (de getLatestConvergence); T-32, opcional
  */
 export function serializeContext(
   latest: MarketSnapshot[],
   events: EventRow[],
   cii: CiiSnapshotRow[] = [],
+  convergence: ConvergenceSignalRow[] = [],
 ): string {
   const now = new Date().toISOString();
   const lines: string[] = [`Fecha de generación: ${now}`];
@@ -168,6 +221,12 @@ export function serializeContext(
   const ciiBlock = buildRiskContext(cii);
   if (ciiBlock !== '') {
     lines.push(ciiBlock);
+  }
+
+  // Señales de convergencia activas — T-32. Se omite si la lista está vacía.
+  const convBlock = buildConvergenceContext(convergence);
+  if (convBlock !== '') {
+    lines.push(convBlock);
   }
 
   return lines.join('\n');
@@ -216,6 +275,7 @@ export async function generateDailyBriefing(): Promise<Briefing> {
   let latest: MarketSnapshot[] = [];
   let events: EventRow[] = [];
   let cii: CiiSnapshotRow[] = [];
+  let convergence: ConvergenceSignalRow[] = [];
 
   try {
     latest = await getLatestMarkets();
@@ -229,14 +289,19 @@ export async function generateDailyBriefing(): Promise<Briefing> {
     // CII por país (T-27): último snapshot por país. El job `cii` (tier medium)
     // lo popula; aquí solo leemos (D-105). Vacío → el bloque se omite (serie nueva).
     cii = await getLatestCii();
+    // Señales de convergencia activas (T-32): último estado por país.
+    // El job de convergencia lo popula; aquí solo leemos (D-105).
+    // Vacío → el bloque se omite hasta que haya datos.
+    convergence = await getLatestConvergence();
   } catch {
     // Si el store falla, degradamos con contexto vacío
     latest = [];
     events = [];
     cii = [];
+    convergence = [];
   }
 
-  const ctx = serializeContext(latest, events, cii);
+  const ctx = serializeContext(latest, events, cii, convergence);
   const prompt = buildBriefingPrompt(ctx);
 
   // 3. Generación LLM con degradación (R-2)

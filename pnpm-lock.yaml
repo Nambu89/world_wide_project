@@ -58,6 +58,15 @@ importers:
         specifier: workspace:*
         version: link:../../store
 
+  packages/core/signals:
+    dependencies:
+      '@www/core-cii':
+        specifier: workspace:*
+        version: link:../cii
+      '@www/store':
+        specifier: workspace:*
+        version: link:../../store
+
   packages/scheduler:
     dependencies:
       '@www/connectors':
@@ -69,6 +78,9 @@ importers:
       '@www/core-cii':
         specifier: workspace:*
         version: link:../core/cii
+      '@www/core-signals':
+        specifier: workspace:*
+        version: link:../core/signals
       '@www/store':
         specifier: workspace:*
         version: link:../store

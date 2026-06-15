@@ -6,10 +6,10 @@
 import type { Client as LibsqlClient } from '@libsql/client';
 import { getDb, _resetDbForTesting } from './db.js';
 import { migrate as runMigrations } from './migrate.js';
-import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow } from './types.js';
+import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow } from './types.js';
 
 // Re-export types so consumers don't need a separate import
-export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow } from './types.js';
+export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow } from './types.js';
 
 // ─── DB singleton ────────────────────────────────────────────────────────────
 
@@ -635,6 +635,12 @@ export async function purgeAndDownsample(beforeMs: number): Promise<void> {
     sql: 'DELETE FROM cii_snapshots WHERE captured_at < ?',
     args: [beforeMs],
   });
+
+  // Step 7 — Purge convergence_signals older than beforeMs (T-28).
+  await client.execute({
+    sql: 'DELETE FROM convergence_signals WHERE captured_at < ?',
+    args: [beforeMs],
+  });
 }
 
 // ─── CII Snapshots API (T-21) ─────────────────────────────────────────────────
@@ -733,6 +739,106 @@ function rowToCiiSnapshotRow(r: Record<string, unknown>): CiiSnapshotRow {
     trend: trend === 'rising' || trend === 'falling' || trend === 'stable' ? trend : null,
     methodologyVersion: String(r['methodology_version']),
     componentsJson: String(r['components_json']),
+    capturedAt: Number(r['captured_at']),
+  };
+  if (r['id'] != null) {
+    base.id = Number(r['id']);
+  }
+  return base;
+}
+
+// ─── Convergence Signals API (T-28, rebanada 4) ──────────────────────────────
+
+/**
+ * Appends convergence signal rows — INSERT only (no upsert; convergence_signals is a
+ * time-series, D-308). No-op for empty arrays.
+ */
+export async function insertConvergenceSignals(rows: ConvergenceSignalRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const client = getDb();
+  for (const row of rows) {
+    await client.execute({
+      sql: `INSERT INTO convergence_signals
+              (country, families_json, dimensions_json, components_json,
+               strength, source_count, dynamic_score, methodology_version,
+               first_detected_at, captured_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        row.country,
+        row.familiesJson,
+        row.dimensionsJson,
+        row.componentsJson,
+        row.strength,
+        row.sourceCount,
+        row.dynamicScore ?? null,
+        row.methodologyVersion,
+        row.firstDetectedAt,
+        row.capturedAt,
+      ],
+    });
+  }
+}
+
+/**
+ * Returns the most recent convergence signal snapshot per (country, families_json).
+ * Groups by (country, families_json) and selects the row with MAX(captured_at) in each group.
+ * If a country has two active familysets (e.g. events×signals and events×markets), both
+ * rows are returned. Ordered by country ASC, captured_at DESC.
+ */
+export async function getLatestConvergence(): Promise<ConvergenceSignalRow[]> {
+  const client = getDb();
+  const result = await client.execute(`
+    SELECT c.*
+    FROM convergence_signals c
+    INNER JOIN (
+      SELECT country, families_json, MAX(captured_at) AS max_ts
+      FROM convergence_signals
+      GROUP BY country, families_json
+    ) latest
+      ON c.country = latest.country
+     AND c.families_json = latest.families_json
+     AND c.captured_at = latest.max_ts
+    ORDER BY c.country ASC, c.captured_at DESC
+  `);
+  return result.rows.map(rowToConvergenceSignalRow);
+}
+
+/**
+ * Returns the convergence signal snapshot closest to (and at or before) aroundMs for a
+ * given (country, families_json) pair. Used to compute dynamicScore and firstDetectedAt
+ * for the next snapshot (D-309).
+ * Returns null if no snapshot exists for that (country, familyset).
+ */
+export async function getPriorConvergence(
+  country: string,
+  familyset: string,
+  aroundMs: number,
+): Promise<ConvergenceSignalRow | null> {
+  const client = getDb();
+  const result = await client.execute({
+    sql: `SELECT * FROM convergence_signals
+          WHERE country = ? AND families_json = ? AND captured_at <= ?
+          ORDER BY captured_at DESC
+          LIMIT 1`,
+    args: [country, familyset, aroundMs],
+  });
+  if (result.rows.length === 0) return null;
+  const r = result.rows[0];
+  if (r === undefined) return null;
+  return rowToConvergenceSignalRow(r);
+}
+
+function rowToConvergenceSignalRow(r: Record<string, unknown>): ConvergenceSignalRow {
+  const base: ConvergenceSignalRow = {
+    country: String(r['country']),
+    familiesJson: String(r['families_json']),
+    dimensionsJson: String(r['dimensions_json']),
+    componentsJson: String(r['components_json']),
+    strength: Number(r['strength']),
+    sourceCount: Number(r['source_count']),
+    dynamicScore: r['dynamic_score'] != null ? Number(r['dynamic_score']) : null,
+    methodologyVersion: String(r['methodology_version']),
+    firstDetectedAt: Number(r['first_detected_at']),
     capturedAt: Number(r['captured_at']),
   };
   if (r['id'] != null) {

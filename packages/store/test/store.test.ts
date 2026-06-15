@@ -32,8 +32,11 @@ import {
   getLatestCii,
   getCiiTrend,
   getPriorCii,
+  insertConvergenceSignals,
+  getLatestConvergence,
+  getPriorConvergence,
 } from '../src/index.js';
-import type { EventRow, CiiSnapshotRow } from '../src/index.js';
+import type { EventRow, CiiSnapshotRow, ConvergenceSignalRow } from '../src/index.js';
 
 function makeInMemoryClient(): LibsqlClient {
   return createClient({ url: ':memory:' });
@@ -1196,5 +1199,231 @@ describe('purgeAndDownsample() — purges cii_snapshots, events and signals inta
     const events = await getEvents({ sinceMs: 0 });
     const ids = events.map((e) => e.sourceEventId);
     assert.ok(ids.includes('SAFE-EVT'), 'SAFE-EVT event survives CII purge step');
+  });
+});
+
+// ─── Helpers for Convergence tests ───────────────────────────────────────────
+
+function makeConvergence(
+  overrides: Partial<ConvergenceSignalRow> & { country: string; capturedAt: number },
+): ConvergenceSignalRow {
+  return {
+    country: overrides.country,
+    familiesJson: overrides.familiesJson ?? '["events","signals"]',
+    dimensionsJson: overrides.dimensionsJson ?? '["conflict","economic"]',
+    componentsJson: overrides.componentsJson ?? '{}',
+    strength: overrides.strength ?? 0.65,
+    sourceCount: overrides.sourceCount ?? 2,
+    dynamicScore: overrides.dynamicScore !== undefined ? overrides.dynamicScore : null,
+    methodologyVersion: overrides.methodologyVersion ?? 'conv-core-1',
+    firstDetectedAt: overrides.firstDetectedAt ?? overrides.capturedAt,
+    capturedAt: overrides.capturedAt,
+  };
+}
+
+// ─── Suite 22: migrate() — migration 005_convergence idempotent (HAZARD W-2) ─
+
+describe('migrate() — migration 005_convergence.sql (T-28, HAZARD W-2)', () => {
+  it('creates convergence_signals table and ix_conv_country_time index — idempotent 3x', async () => {
+    const client = makeInMemoryClient();
+
+    await runMigrations(client);
+    await runMigrations(client);
+    await runMigrations(client);
+
+    // Assert table exists via sqlite_master (catches HAZARD W-2: silent discard of CREATE)
+    const tableResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE name='convergence_signals'",
+    );
+    assert.equal(tableResult.rows.length, 1, 'convergence_signals table created');
+
+    // Assert index exists
+    const indexResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE name='ix_conv_country_time'",
+    );
+    assert.equal(indexResult.rows.length, 1, 'ix_conv_country_time index exists');
+
+    // Migration 005 recorded exactly once
+    const mig005 = await client.execute(
+      "SELECT id FROM _migrations WHERE id = '005_convergence.sql'",
+    );
+    assert.equal(mig005.rows.length, 1, '005_convergence.sql recorded exactly once');
+
+    // Prior tables still intact (additive only — no other tables touched)
+    for (const tbl of ['cii_snapshots', 'events', 'signals']) {
+      const r = await client.execute({
+        sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        args: [tbl],
+      });
+      assert.equal(r.rows.length, 1, `${tbl} table still exists (not touched by 005)`);
+    }
+  });
+});
+
+// ─── Suite 23: insertConvergenceSignals + getLatestConvergence ────────────────
+
+describe('insertConvergenceSignals() + getLatestConvergence()', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+  });
+
+  it('inserts and reads back a convergence signal (round-trip)', async () => {
+    const now = Date.now();
+    await insertConvergenceSignals([
+      makeConvergence({
+        country: 'SY',
+        capturedAt: now,
+        strength: 0.72,
+        sourceCount: 2,
+        familiesJson: '["events","signals"]',
+        dimensionsJson: '["conflict","economic"]',
+        dynamicScore: 0.1,
+        firstDetectedAt: now - 3_600_000,
+      }),
+    ]);
+
+    const rows = await getLatestConvergence();
+    const sy = rows.find((r) => r.country === 'SY');
+    assert.ok(sy !== undefined, 'SY row present');
+    assert.ok(Math.abs(sy.strength - 0.72) < 0.001, 'strength correct');
+    assert.equal(sy.sourceCount, 2, 'sourceCount correct');
+    assert.equal(sy.familiesJson, '["events","signals"]', 'familiesJson correct');
+    assert.equal(sy.dimensionsJson, '["conflict","economic"]', 'dimensionsJson correct');
+    assert.ok(sy.dynamicScore !== null && Math.abs(sy.dynamicScore - 0.1) < 0.001, 'dynamicScore correct');
+    assert.equal(sy.methodologyVersion, 'conv-core-1', 'methodologyVersion correct');
+    assert.ok(sy.id !== undefined && sy.id > 0, 'id assigned by DB');
+  });
+
+  it('getLatestConvergence returns the last snapshot per (country, familyset) with >= 2 captured_at values', async () => {
+    const BASE = Date.now();
+    const earlier = BASE - 60_000;
+
+    await insertConvergenceSignals([
+      makeConvergence({ country: 'IQ', capturedAt: earlier, strength: 0.55, familiesJson: '["events","signals"]' }),
+      makeConvergence({ country: 'IQ', capturedAt: BASE,    strength: 0.80, familiesJson: '["events","signals"]' }),
+    ]);
+
+    const rows = await getLatestConvergence();
+    const iqRows = rows.filter((r) => r.country === 'IQ' && r.familiesJson === '["events","signals"]');
+    assert.equal(iqRows.length, 1, 'only 1 IQ row for this familyset');
+    assert.ok(Math.abs((iqRows[0]?.strength ?? 0) - 0.80) < 0.001, 'IQ shows latest snapshot (strength 0.80)');
+  });
+
+  it('getLatestConvergence returns both rows when a country has 2 active familysets', async () => {
+    const now = Date.now();
+
+    await insertConvergenceSignals([
+      makeConvergence({ country: 'AF', capturedAt: now, familiesJson: '["events","signals"]', strength: 0.60 }),
+      makeConvergence({ country: 'AF', capturedAt: now, familiesJson: '["events","markets","signals"]', strength: 0.75 }),
+    ]);
+
+    const rows = await getLatestConvergence();
+    const afRows = rows.filter((r) => r.country === 'AF');
+    assert.equal(afRows.length, 2, 'AF has 2 rows (one per familyset)');
+  });
+
+  it('handles null dynamicScore', async () => {
+    const now = Date.now();
+    await insertConvergenceSignals([
+      makeConvergence({ country: 'ML', capturedAt: now, dynamicScore: null }),
+    ]);
+    const rows = await getLatestConvergence();
+    const ml = rows.find((r) => r.country === 'ML');
+    assert.ok(ml !== undefined, 'ML row present');
+    assert.equal(ml.dynamicScore, null, 'dynamicScore is null');
+  });
+
+  it('handles empty array without error', async () => {
+    await insertConvergenceSignals([]); // must not throw
+  });
+});
+
+// ─── Suite 24: getPriorConvergence ────────────────────────────────────────────
+
+describe('getPriorConvergence(country, familyset, aroundMs)', () => {
+  const BASE = 1_700_000_000_000; // fixed epoch to avoid Date.now() drift
+
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const familyset = '["events","signals"]';
+    await insertConvergenceSignals([
+      makeConvergence({ country: 'SD', capturedAt: BASE - 86_400_000, strength: 0.55, familiesJson: familyset, firstDetectedAt: BASE - 86_400_000 }),
+      makeConvergence({ country: 'SD', capturedAt: BASE,              strength: 0.70, familiesJson: familyset, firstDetectedAt: BASE - 86_400_000 }),
+    ]);
+  });
+
+  it('returns the closest snapshot at or before aroundMs', async () => {
+    const familyset = '["events","signals"]';
+    const prior = await getPriorConvergence('SD', familyset, BASE - 1000);
+    assert.ok(prior !== null, 'prior found');
+    assert.ok(Math.abs(prior.strength - 0.55) < 0.001, 'returns the prior snapshot (strength 0.55)');
+    assert.equal(prior.capturedAt, BASE - 86_400_000, 'capturedAt matches prior snapshot');
+  });
+
+  it('returns the most recent snapshot when aroundMs >= latest capturedAt', async () => {
+    const familyset = '["events","signals"]';
+    const prior = await getPriorConvergence('SD', familyset, BASE + 1000);
+    assert.ok(prior !== null, 'prior found');
+    assert.ok(Math.abs((prior?.strength ?? 0) - 0.70) < 0.001, 'returns latest when aroundMs after all rows');
+  });
+
+  it('returns null when no snapshot exists for the (country, familyset)', async () => {
+    const prior = await getPriorConvergence('ZZ', '["events","signals"]', BASE);
+    assert.equal(prior, null, 'null for unknown country');
+  });
+
+  it('returns null when familyset does not match (different familyset)', async () => {
+    const prior = await getPriorConvergence('SD', '["events","markets"]', BASE);
+    assert.equal(prior, null, 'null when familyset does not match');
+  });
+});
+
+// ─── Suite 25: purgeAndDownsample — purges convergence_signals, cii_snapshots intact ─
+
+describe('purgeAndDownsample() — purges convergence_signals, cii_snapshots intact', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    // Old convergence signal — should be purged
+    await insertConvergenceSignals([
+      makeConvergence({ country: 'LY', capturedAt: cutoff - 2000 }),
+    ]);
+    // Recent convergence signal — should survive
+    await insertConvergenceSignals([
+      makeConvergence({ country: 'LY', capturedAt: now }),
+    ]);
+
+    // CII snapshot — must NOT be purged by the convergence purge step
+    await insertCiiSnapshots([
+      makeCii({ country: 'LY', capturedAt: now }),
+    ]);
+  });
+
+  it('purges convergence_signals older than beforeMs', async () => {
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    await purgeAndDownsample(cutoff);
+
+    const rows = await getLatestConvergence();
+    const lyRows = rows.filter((r) => r.country === 'LY');
+    assert.equal(lyRows.length, 1, 'only 1 LY convergence signal survives (the recent one)');
+    assert.ok((lyRows[0]?.capturedAt ?? 0) >= cutoff, 'surviving signal is recent');
+  });
+
+  it('cii_snapshots are NOT purged by the convergence purge step', async () => {
+    const cii = await getLatestCii();
+    const ly = cii.find((r) => r.country === 'LY');
+    assert.ok(ly !== undefined, 'LY CII snapshot survives convergence purge step');
   });
 });

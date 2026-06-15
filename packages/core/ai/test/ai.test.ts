@@ -24,7 +24,7 @@ import assert from 'node:assert/strict';
 
 // Importaciones del paquete (NodeNext: extensiones .js en imports relativos)
 import { resolveChain, pickProvider } from '../src/router.js';
-import { serializeContext, generateDailyBriefing, buildGlobalRiskContext, buildRiskContext } from '../src/briefing.js';
+import { serializeContext, generateDailyBriefing, buildGlobalRiskContext, buildRiskContext, buildConvergenceContext } from '../src/briefing.js';
 import { buildBriefingPrompt, FINANCIAL_ANALYST_PERSONA } from '../src/persona.js';
 
 // Importaciones del store para tests de integración con DB :memory:
@@ -37,6 +37,7 @@ import {
   type MarketSnapshot,
   type EventRow,
   type Briefing,
+  type ConvergenceSignalRow,
 } from '@www/store';
 
 // Aseguramos que los tests de store usen :memory: (no la DB de producción)
@@ -690,4 +691,147 @@ describe('generateDailyBriefing()', () => {
       assert.ok(result.body_md.includes('no disponible'), 'sin LLM debe degradar graciosamente');
     }),
   );
+});
+
+// ─── Suite 7: buildConvergenceContext() (T-32) ───────────────────────────────
+
+describe('buildConvergenceContext()', () => {
+  /** Helper: construye un ConvergenceSignalRow con valores por defecto */
+  const convRow = (over: Partial<ConvergenceSignalRow> = {}): ConvergenceSignalRow => ({
+    country: 'Syria',
+    familiesJson: JSON.stringify(['conflict', 'economic']),
+    dimensionsJson: JSON.stringify(['conflict', 'economic']),
+    componentsJson: JSON.stringify([]),
+    strength: 0.82,
+    sourceCount: 3,
+    dynamicScore: 5,
+    methodologyVersion: 'conv-1',
+    firstDetectedAt: NOW - 7200_000,
+    capturedAt: NOW,
+    ...over,
+  });
+
+  test('devuelve "" si la lista está vacía', () => {
+    assert.equal(buildConvergenceContext([]), '');
+  });
+
+  test('incluye encabezado cuando hay señales', () => {
+    const result = buildConvergenceContext([convRow()]);
+    assert.ok(result.includes('Señales de convergencia activas'), 'debe incluir encabezado');
+  });
+
+  test('incluye país, familias, strength con 2 decimales y flecha ↑ cuando dynamicScore > 0', () => {
+    const result = buildConvergenceContext([convRow()]);
+    assert.ok(result.includes('Syria'), 'debe incluir el país');
+    assert.ok(result.includes('conflict'), 'debe incluir familia conflict');
+    assert.ok(result.includes('economic'), 'debe incluir familia economic');
+    assert.ok(result.includes('0.82'), 'debe incluir strength a 2 decimales');
+    assert.ok(result.includes('↑'), 'debe incluir flecha ↑ cuando dynamicScore > 0');
+  });
+
+  test('flecha ↓ cuando dynamicScore < 0', () => {
+    const result = buildConvergenceContext([convRow({ dynamicScore: -3 })]);
+    assert.ok(result.includes('↓'), 'debe incluir flecha ↓ cuando dynamicScore < 0');
+  });
+
+  test('flecha → cuando dynamicScore = 0', () => {
+    const result = buildConvergenceContext([convRow({ dynamicScore: 0 })]);
+    assert.ok(result.includes('→'), 'debe incluir flecha → cuando dynamicScore = 0');
+  });
+
+  test('flecha → cuando dynamicScore = null', () => {
+    const result = buildConvergenceContext([convRow({ dynamicScore: null })]);
+    assert.ok(result.includes('→'), 'debe incluir flecha → cuando dynamicScore es null');
+  });
+
+  test('ordena por strength desc', () => {
+    const result = buildConvergenceContext([
+      convRow({ country: 'LowRisk', strength: 0.40 }),
+      convRow({ country: 'HighRisk', strength: 0.90 }),
+    ]);
+    const idxH = result.indexOf('HighRisk');
+    const idxL = result.indexOf('LowRisk');
+    assert.ok(idxH < idxL, 'HighRisk (0.90) debe aparecer antes de LowRisk (0.40)');
+  });
+
+  test('familiesJson inválido → no rompe, omite familias', () => {
+    const result = buildConvergenceContext([convRow({ familiesJson: 'not-json' })]);
+    assert.ok(result.includes('Syria'), 'la línea se produce aunque familiesJson sea inválido');
+    assert.ok(result.includes('0.82'), 'incluye strength aunque familiesJson sea inválido');
+  });
+
+  test('familiesJson vacío → no rompe', () => {
+    const result = buildConvergenceContext([convRow({ familiesJson: '[]' })]);
+    assert.ok(result.includes('Syria'), 'la línea se produce con familias vacías');
+  });
+
+  test('limita a top-8 aunque haya más señales', () => {
+    const rows = Array.from({ length: 12 }, (_, i) =>
+      convRow({ country: `Country${i}`, strength: 0.9 - i * 0.05 }),
+    );
+    const result = buildConvergenceContext(rows);
+    const lineCount = result.split('\n').filter((l) => l.trim().startsWith('-')).length;
+    assert.equal(lineCount, 8, 'debe limitar a 8 líneas de señales');
+  });
+});
+
+// ─── Suite 8: serializeContext() con convergencia (T-32) ─────────────────────
+
+describe('serializeContext() con convergencia (T-32)', () => {
+  const convRow = (over: Partial<ConvergenceSignalRow> = {}): ConvergenceSignalRow => ({
+    country: 'Iran',
+    familiesJson: JSON.stringify(['political', 'economic']),
+    dimensionsJson: JSON.stringify(['political', 'economic']),
+    componentsJson: JSON.stringify([]),
+    strength: 0.75,
+    sourceCount: 2,
+    dynamicScore: 2,
+    methodologyVersion: 'conv-1',
+    firstDetectedAt: NOW - 3600_000,
+    capturedAt: NOW,
+    ...over,
+  });
+
+  test('incluye bloque de convergencia cuando hay señales', () => {
+    const result = serializeContext([], [], [], [convRow()]);
+    assert.ok(result.includes('Señales de convergencia activas'), 'debe incluir encabezado de convergencia');
+    assert.ok(result.includes('Iran'), 'debe incluir país de la señal');
+    assert.ok(result.includes('0.75'), 'debe incluir strength');
+  });
+
+  test('omite bloque de convergencia cuando la lista está vacía', () => {
+    const result = serializeContext([], [], [], []);
+    assert.ok(!result.includes('Señales de convergencia activas'), 'no debe incluir encabezado si lista vacía');
+  });
+
+  test('sin 4º argumento (valor por defecto) omite bloque de convergencia', () => {
+    const result = serializeContext([], []);
+    assert.ok(!result.includes('Señales de convergencia activas'), 'parámetro por defecto = [] → bloque omitido');
+  });
+
+  test('incluye mercados, eventos, CII y convergencia en el mismo contexto', () => {
+    const markets: MarketSnapshot[] = [
+      { source: 'yahoo', symbol: 'SPY', asset_class: 'equity', price: 450, change_pct: 1, captured_at: NOW },
+    ];
+    const events: EventRow[] = [
+      {
+        source: 'usgs', sourceEventId: 'q1', eventType: 'earthquake', category: 'natural',
+        severity: 60, lat: 35, lon: 139, country: 'JP', title: 'Quake',
+        url: null, occurredAt: NOW - 3600_000, capturedAt: NOW, rawJson: null,
+      },
+    ];
+    const cii = [
+      {
+        country: 'Japan', composite: 62, baselineRisk: 40, eventScore: 75,
+        dynamicScore: 4, trend: 'rising' as const, methodologyVersion: 'cii-core-1',
+        componentsJson: JSON.stringify([{ key: 'conflict', score: 80, signalPresent: true, weight: 0.25, sources: [] }]),
+        capturedAt: NOW,
+      },
+    ];
+    const result = serializeContext(markets, events, cii, [convRow()]);
+    assert.ok(result.includes('SPY'), 'incluye mercados');
+    assert.ok(result.includes('earthquake'), 'incluye eventos');
+    assert.ok(result.includes('CII'), 'incluye bloque CII');
+    assert.ok(result.includes('Señales de convergencia activas'), 'incluye bloque convergencia');
+  });
 });

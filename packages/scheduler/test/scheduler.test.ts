@@ -20,7 +20,7 @@ import {
   type ConnectorResult,
 } from '../src/index.js';
 
-import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section, CiiSnapshotRow } from '@www/store';
+import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section, CiiSnapshotRow, ConvergenceSignalRow } from '@www/store';
 import type { CiiScore } from '@www/core-cii';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -466,6 +466,92 @@ describe('defaultJobs', () => {
     const jobs = defaultJobs(undefined, deps);
     const order = jobs.map((j) => j.name);
     assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'cii', 'news', 'daily']);
+  });
+
+  // ── T-31: convergencia encadenada dentro del job cii (C-4/D-312) ──────────
+  function makeCiiScore(): CiiScore {
+    return {
+      country:            'Testland',
+      composite:          55,
+      baselineRisk:       30,
+      eventScore:         60,
+      components:         [],
+      methodologyVersion: 'cii-core-1',
+      capturedAt:         Date.now(),
+    };
+  }
+
+  function makeConvRow(): ConvergenceSignalRow {
+    return {
+      country:            'Testland',
+      familiesJson:       JSON.stringify(['events', 'signals']),
+      dimensionsJson:     JSON.stringify(['conflict', 'economic']),
+      componentsJson:     '[]',
+      strength:           0.7,
+      sourceCount:        2,
+      dynamicScore:       0,
+      methodologyVersion: 'conv-core-1',
+      firstDetectedAt:    Date.now(),
+      capturedAt:         Date.now(),
+    };
+  }
+
+  it('cii job: convergence runs AFTER insertCiiSnapshots (orden por construcción, C-4/D-312)', async () => {
+    const order: string[] = [];
+    const deps: Partial<SchedulerDeps> = {
+      ...makeDeps(),
+      computeAllCountries:      async () => [makeCiiScore()],
+      getPriorCii:              async () => null,
+      insertCiiSnapshots:       async () => { order.push('insertCii'); },
+      detectAllConvergence:     async () => { order.push('detectConv'); return [makeConvRow()]; },
+      insertConvergenceSignals: async () => { order.push('insertConv'); },
+    };
+    const jobs = defaultJobs(undefined, deps);
+    const ciiJob = jobs.find((j) => j.name === 'cii');
+    assert.ok(ciiJob, 'cii job not found');
+
+    await ciiJob.run();
+
+    // El orden REAL de ejecución (no la posición en el array) prueba el fix de ISSUE-1.
+    assert.deepEqual(
+      order,
+      ['insertCii', 'detectConv', 'insertConv'],
+      `expected insertCii→detectConv→insertConv, got ${order.join('→')}`,
+    );
+  });
+
+  it('cii job: detectAllConvergence devuelve [] → NO llama insertConvergenceSignals', async () => {
+    let convInserted = 0;
+    const deps: Partial<SchedulerDeps> = {
+      ...makeDeps(),
+      computeAllCountries:      async () => [makeCiiScore()],
+      getPriorCii:              async () => null,
+      insertCiiSnapshots:       async () => {},
+      detectAllConvergence:     async () => [],
+      insertConvergenceSignals: async () => { convInserted++; },
+    };
+    const jobs = defaultJobs(undefined, deps);
+    const ciiJob = jobs.find((j) => j.name === 'cii');
+    await ciiJob!.run();
+    assert.equal(convInserted, 0, 'insertConvergenceSignals no debe llamarse sin señales');
+  });
+
+  it('cii job: 0 CII scores → ni cii ni convergencia persisten (early-return)', async () => {
+    let ciiInserted = 0;
+    let convDetected = 0;
+    const deps: Partial<SchedulerDeps> = {
+      ...makeDeps(),
+      computeAllCountries:      async () => [],
+      getPriorCii:              async () => null,
+      insertCiiSnapshots:       async () => { ciiInserted++; },
+      detectAllConvergence:     async () => { convDetected++; return []; },
+      insertConvergenceSignals: async () => {},
+    };
+    const jobs = defaultJobs(undefined, deps);
+    const ciiJob = jobs.find((j) => j.name === 'cii');
+    await ciiJob!.run();
+    assert.equal(ciiInserted, 0, 'sin scores no se insertan cii_snapshots');
+    assert.equal(convDetected, 0, 'sin cii no se corre detectAllConvergence (early-return)');
   });
 
   it('uses custom intervals from cfg', () => {

@@ -25,4 +25,7 @@ export {
 export {
   serializeContext,
   generateDailyBriefing,
+  buildGlobalRiskContext,
+  buildRiskContext,
+  buildConvergenceContext,
 } from './briefing.js';

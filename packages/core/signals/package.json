@@ -1,5 +1,5 @@
 {
-  "name": "@www/scheduler",
+  "name": "@www/core-signals",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -17,9 +17,6 @@
   },
   "dependencies": {
     "@www/store": "workspace:*",
-    "@www/connectors": "workspace:*",
-    "@www/core-ai": "workspace:*",
-    "@www/core-cii": "workspace:*",
-    "@www/core-signals": "workspace:*"
+    "@www/core-cii": "workspace:*"
   }
 }

@@ -1,6 +1,6 @@
 # ROADMAP — world_wide_project
 
-Progreso global: `████████░░ 81% (13/16)` — **Fase 1 (MVP Finanzas) CERRADA** + **Fase 2: rebanada 1 (eventos globales) + rebanada 2 (radar geoeconómico) + rebanada 3 (CII scoring) CERRADAS**. CII: motor clean-room {conflict,economic,political,social} desde events+signals, normalizeCountryKey FIPS→nombre (109 países en vivo, hotspots incl), /api/cii + RiskPanel + map-tie + briefing; suite 454/454 + smoke vivo + browser E2E PASS. Siguiente: completar dominios (Finanzas FRED/EIA, Educación ONNX) o motor de convergencia cross-domain (spike).
+Progreso global: `█████████░ 88% (14/16)` — **Fase 1 (MVP Finanzas) CERRADA** + **Fase 2: rebanadas 1 (eventos) + 2 (radar) + 3 (CII) CERRADAS** + **rebanada 4 (motor de convergencia cross-domain, el último diferencial) CERRADA**. Convergencia: paquete clean-room `@www/core-signals`, ≥2 familias-de-dato disjuntas/72h/magnitud≥0.5, anti-doble-conteo por dataFamily, observaciones desde CII + markets exógeno, `convergence_signals` (migr 005) + dynamicScore, encadenado dentro del job cii (orden por construcción), bloque en el briefing; calibración por-dimensión `conv-core-2`; suite 541/541 + global tsc + smoke EN VIVO 10 señales reales (anti-doble-conteo OK). SIN UI (NG-4, briefing+persistencia). Siguiente: **rebanada-superficie UI de convergencia** (/api + mapa + panel) o completar dominios (Finanzas FRED/EIA, Educación ONNX).
 
 > Prioridad: **Alta** = MVP, **Media** = dominios completos, **Baja** = pulido. Marca `[x]` al completar (con `verifier` = VERIFIED).
 
@@ -29,7 +29,7 @@ Progreso global: `████████░░ 81% (13/16)` — **Fase 1 (MVP 
 
 ## Fase 3 — Síntesis IA + correlación
 - [ ] **Media** — Router completo `ollama → groq → claude` + personas/plantillas de briefing por dominio
-- [ ] **Media** — `packages/core/signals/` motor de convergencia cross-domain *(⚠️ spike: lógica no servida por worldmonitor — ver INVESTIGACION-FUSION.md §9.1)*
+- [x] **Media** — **`packages/core/signals/` motor de convergencia cross-domain** ✅ **CERRADA** (rebanada 4, ADR-012). Paquete clean-room `@www/core-signals`: `detectConvergence` pura (≥2 familias-de-dato DISJUNTAS events/signals/markets / ventana 72h / magnitud≥0.5, anti-doble-conteo por `dataFamily` D-306) + `detectAllConvergence` (observaciones desde componentes CII + markets exógeno, estrés risk-off desde `change_pct` REAL — no `regimeDelta`, C-1) + `convergence_signals` (migr. 005, append + dynamicScore D-309) + job encadenado DENTRO del run() del job cii (orden por construcción, C-4: el scheduler corre el tier en paralelo) + bloque en el briefing (sin LLM nuevo). **Calibración por-dimensión** `DIMENSION_SCALE` (signals corre 0..8 vs events 0..100 → normaliza sin tocar CII NG-6, `conv-core-2`). Verificado: suite 541/541 + global tsc + **smoke EN VIVO 10 señales reales** (Iraq/Israel/Pakistan/Russia/Ukraine…, anti-doble-conteo OK). SIN API/mapa (NG-4, decisión usuario = briefing+persistencia). Follow-ups: calibración fina DIMENSION_SCALE (GAP-2), markets change_pct null. **Siguiente diferido: rebanada-superficie UI** (/api/convergence + capa mapa + ConvergencePanel + map-tie).
 
 ## Fase 4 — Pulido (opcional)
 - [ ] **Baja** — Sistema de variantes (Finanzas/Educación/Política)

@@ -32,18 +32,23 @@ import {
   upsertSignals,
   insertCiiSnapshots,
   getPriorCii,
+  insertConvergenceSignals,
   purgeAndDownsample,
   type MarketSnapshot,
   type NewsItem,
   type EventRow,
   type SignalRow,
   type CiiSnapshotRow,
+  type ConvergenceSignalRow,
 } from '@www/store';
 
 import { generateDailyBriefing } from '@www/core-ai';
 import type { Briefing } from '@www/store';
 
 import { computeAllCountries, computeDynamic, type CiiScore } from '@www/core-cii';
+
+// T-31: convergencia encadenada DENTRO del job cii (orden por construcción, C-4/D-312).
+import { detectAllConvergence } from '@www/core-signals';
 
 // ─── ConnectorResult contract ─────────────────────────────────────────────────
 // Mirrors the structural type exported by @www/connectors (finance/markets.ts).
@@ -185,6 +190,11 @@ export interface SchedulerDeps {
   getPriorCii:         (country: string, aroundMs: number) => Promise<CiiSnapshotRow | null>;
   insertCiiSnapshots:  (rows: CiiSnapshotRow[]) => Promise<void>;
 
+  // Convergence pipeline (@www/core-signals + @www/store) — T-31
+  // Encadenada dentro del job cii (orden por construcción, C-4/D-312).
+  detectAllConvergence:     (nowMs: number) => Promise<ConvergenceSignalRow[]>;
+  insertConvergenceSignals: (rows: ConvergenceSignalRow[]) => Promise<void>;
+
   // AI pipeline (@www/core-ai) — defaults to real implementation
   generateDailyBriefing: () => Promise<Briefing>;
 }
@@ -211,6 +221,8 @@ const REAL_STORE_AI_DEPS: Pick<
   | 'computeAllCountries'
   | 'getPriorCii'
   | 'insertCiiSnapshots'
+  | 'detectAllConvergence'
+  | 'insertConvergenceSignals'
   | 'generateDailyBriefing'
 > = {
   insertMarketSnapshots,
@@ -221,6 +233,8 @@ const REAL_STORE_AI_DEPS: Pick<
   computeAllCountries,
   getPriorCii,
   insertCiiSnapshots,
+  detectAllConvergence,
+  insertConvergenceSignals,
   generateDailyBriefing,
 };
 
@@ -387,9 +401,13 @@ export function defaultJobs(
     },
   };
 
-  // ── cii job (medium tier) — T-24: CII scoring pipeline ───────────────────
+  // ── cii job (medium tier) — T-24: CII scoring pipeline + T-31: convergencia ─
   // D-211: tier medium (same as gkg/gdelt). Reads store internally via computeAllCountries.
   // ADR-004/D-002: persist snapshots BEFORE serving — insertCiiSnapshots before any read.
+  // T-31 (C-4/D-312): la convergencia se encadena AL FINAL de este run() — NO como job
+  // hermano — porque el scheduler corre los jobs de un tier en paralelo (Promise.all boot)
+  // sin orden garantizado; encadenar aquí asegura que detectAllConvergence lee los
+  // cii_snapshots recién escritos de ESTA misma corrida.
   const ciiJob: Job = {
     name: 'cii',
     tier: 'medium',
@@ -442,6 +460,14 @@ export function defaultJobs(
 
       await storeAi.insertCiiSnapshots(rows);
       console.log(`[scheduler] cii: persisted ${rows.length} CII snapshots`);
+
+      // ── T-31: convergencia encadenada (orden por construcción, C-4/D-312) ──
+      // Lee los cii_snapshots recién escritos arriba (mismo `now`, misma corrida).
+      const convSignals = await (deps?.detectAllConvergence ?? storeAi.detectAllConvergence)(now);
+      if (convSignals.length > 0) {
+        await storeAi.insertConvergenceSignals(convSignals);
+        console.log(`[scheduler] cii→convergence: persisted ${convSignals.length} signals`);
+      }
     },
   };
 

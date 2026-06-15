@@ -138,6 +138,35 @@ export interface MarketDaily {
   close: number | null;
 }
 
+// ─── Convergence Signals (T-28, rebanada 4) ──────────────────────────────────
+
+/**
+ * Convergence signal snapshot row — camelCase (L-1: web wire is camelCase).
+ * Persisted as a time-series append in `convergence_signals` (migration 005).
+ * families: JSON-serialized sorted array of DataFamily strings ('events'|'signals'|'markets').
+ * dimensions: JSON-serialized sorted array of contributing ConvergenceDimension strings.
+ * components: JSON-serialized breakdown of contributing observations for audit.
+ * strength: mean time-decayed magnitude [0,1] across contributing families.
+ * sourceCount: number of distinct data families contributing (>= MIN_SOURCES = 2).
+ * dynamicScore: delta vs prior snapshot for the same (country, familyset); null on first detection.
+ * methodologyVersion: identifies the scoring formula version ('conv-core-1').
+ * firstDetectedAt: epoch ms of the first ever detection for this (country, familyset).
+ * capturedAt: epoch ms of this snapshot.
+ */
+export interface ConvergenceSignalRow {
+  id?: number;
+  country: string;
+  familiesJson: string;
+  dimensionsJson: string;
+  componentsJson: string;
+  strength: number;
+  sourceCount: number;
+  dynamicScore: number | null;
+  methodologyVersion: string;
+  firstDetectedAt: number;
+  capturedAt: number;
+}
+
 // ─── CII Snapshots (T-21, ADR-CII) ───────────────────────────────────────────
 
 /**
