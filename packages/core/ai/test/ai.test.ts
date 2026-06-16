@@ -24,7 +24,7 @@ import assert from 'node:assert/strict';
 
 // Importaciones del paquete (NodeNext: extensiones .js en imports relativos)
 import { resolveChain, pickProvider } from '../src/router.js';
-import { serializeContext, generateDailyBriefing, buildGlobalRiskContext, buildRiskContext, buildConvergenceContext } from '../src/briefing.js';
+import { serializeContext, generateDailyBriefing, buildGlobalRiskContext, buildRiskContext, buildConvergenceContext, buildSanctionsContext } from '../src/briefing.js';
 import { buildBriefingPrompt, FINANCIAL_ANALYST_PERSONA } from '../src/persona.js';
 
 // Importaciones del store para tests de integración con DB :memory:
@@ -34,10 +34,12 @@ import {
   insertMarketSnapshots,
   upsertEvents,
   saveBriefing,
+  insertSanctions,
   type MarketSnapshot,
   type EventRow,
   type Briefing,
   type ConvergenceSignalRow,
+  type SanctionRow,
 } from '@www/store';
 
 // Aseguramos que los tests de store usen :memory: (no la DB de producción)
@@ -834,4 +836,132 @@ describe('serializeContext() con convergencia (T-32)', () => {
     assert.ok(result.includes('CII'), 'incluye bloque CII');
     assert.ok(result.includes('Señales de convergencia activas'), 'incluye bloque convergencia');
   });
+});
+
+// ─── Suite 9: buildSanctionsContext() (T-38) ──────────────────────────────────
+
+describe('buildSanctionsContext()', () => {
+  const sanctionRow = (country: string, sanctionedCount: number): SanctionRow => ({
+    country,
+    sanctionedCount,
+    capturedAt: NOW,
+  });
+
+  test('devuelve "" si la lista está vacía', () => {
+    assert.equal(buildSanctionsContext([]), '');
+  });
+
+  test('devuelve bloque legible con un país', () => {
+    const result = buildSanctionsContext([sanctionRow('Iran', 1234)]);
+    assert.ok(result.includes('Iran'), 'incluye el país');
+    assert.ok(result.includes('1234'), 'incluye el conteo');
+    assert.ok(result.includes('OFAC'), 'incluye prefijo OFAC');
+  });
+
+  test('ordena por sanctionedCount desc', () => {
+    const result = buildSanctionsContext([
+      sanctionRow('Cuba', 50),
+      sanctionRow('Russia', 900),
+      sanctionRow('Iran', 1234),
+    ]);
+    const idxI = result.indexOf('Iran');
+    const idxR = result.indexOf('Russia');
+    const idxC = result.indexOf('Cuba');
+    assert.ok(idxI < idxR, 'Iran (1234) antes de Russia (900)');
+    assert.ok(idxR < idxC, 'Russia (900) antes de Cuba (50)');
+  });
+
+  test('limita a top-10 aunque haya más entradas', () => {
+    const rows = Array.from({ length: 15 }, (_, i) =>
+      sanctionRow(`Country${String(i).padStart(2, '0')}`, 1000 - i),
+    );
+    const result = buildSanctionsContext(rows);
+    // El bloque es una sola línea con 10 entradas separadas por ", "
+    // Contamos las ocurrencias de " (" (abre paréntesis de conteo)
+    const matches = result.match(/\(/g);
+    assert.ok(matches !== null && matches.length <= 10, 'no más de 10 entradas en el bloque');
+  });
+
+  test('formato: "Países bajo más sanciones OFAC: <país> (<N>), …"', () => {
+    const result = buildSanctionsContext([sanctionRow('Syria', 300), sanctionRow('Korea', 200)]);
+    assert.ok(result.startsWith('Países bajo más sanciones OFAC:'), 'empieza con el prefijo correcto');
+    assert.ok(result.includes('Syria (300)'), 'formato país (N)');
+    assert.ok(result.includes('Korea (200)'), 'formato país (N)');
+  });
+});
+
+// ─── Suite 10: serializeContext() con sanciones (T-38) ────────────────────────
+
+describe('serializeContext() con sanciones (T-38)', () => {
+  const sanctionRow = (country: string, sanctionedCount: number): SanctionRow => ({
+    country,
+    sanctionedCount,
+    capturedAt: NOW,
+  });
+
+  test('incluye bloque de sanciones cuando hay datos', () => {
+    const result = serializeContext([], [], [], [], [sanctionRow('Iran', 1234)]);
+    assert.ok(result.includes('OFAC'), 'incluye encabezado OFAC');
+    assert.ok(result.includes('Iran'), 'incluye el país');
+    assert.ok(result.includes('1234'), 'incluye el conteo');
+  });
+
+  test('omite bloque de sanciones cuando la lista está vacía', () => {
+    const result = serializeContext([], [], [], [], []);
+    assert.ok(!result.includes('OFAC'), 'no debe incluir bloque OFAC si lista vacía');
+  });
+
+  test('sin 5º argumento (valor por defecto) omite bloque de sanciones', () => {
+    const result = serializeContext([], []);
+    assert.ok(!result.includes('OFAC'), 'parámetro por defecto = [] → bloque omitido');
+  });
+
+  test('callers existentes con 4 args siguen funcionando (sin cambio de contrato)', () => {
+    // serializeContext(latest, events, cii, convergence) — sin 5º arg
+    const result = serializeContext([], [], [], []);
+    assert.ok(result.includes('Fecha de generación'), 'genera contexto válido con 4 argumentos');
+  });
+
+  test('bloque de sanciones aparece después del bloque de convergencia', () => {
+    const conv: ConvergenceSignalRow = {
+      country: 'Iran',
+      familiesJson: JSON.stringify(['political']),
+      dimensionsJson: JSON.stringify(['political']),
+      componentsJson: JSON.stringify([]),
+      strength: 0.70,
+      sourceCount: 2,
+      dynamicScore: null,
+      methodologyVersion: 'conv-1',
+      firstDetectedAt: NOW - 3600_000,
+      capturedAt: NOW,
+    };
+    const result = serializeContext([], [], [], [conv], [sanctionRow('Russia', 800)]);
+    const idxConv = result.indexOf('Señales de convergencia activas');
+    const idxOfac = result.indexOf('OFAC');
+    assert.ok(idxConv < idxOfac, 'bloque convergencia antes que bloque sanciones');
+  });
+
+  test('generateDailyBriefing() con sanciones en DB incluye bloque OFAC en contexto',
+    withEnv({ OPENAI_API_KEY: undefined, ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
+      _resetDbForTesting();
+      await migrate();
+      try {
+        await insertSanctions([
+          { country: 'Iran', sanctionedCount: 1234, capturedAt: NOW - 1000 },
+          { country: 'Russia', sanctionedCount: 900, capturedAt: NOW - 1000 },
+        ]);
+        // generateDailyBriefing degrada por falta de LLM, pero el contexto se construye.
+        // Verificamos leyendo directamente getLatestSanctions + serializeContext.
+        const { getLatestSanctions: fetchSanctions } = await import('@www/store');
+        const sanctions = await fetchSanctions();
+        assert.equal(sanctions.length, 2, 'debe haber 2 filas de sanciones en DB');
+        const ctx = serializeContext([], [], [], [], sanctions);
+        assert.ok(ctx.includes('OFAC'), 'contexto incluye bloque OFAC');
+        assert.ok(ctx.includes('Iran'), 'contexto incluye Iran');
+        assert.ok(ctx.includes('Russia'), 'contexto incluye Russia');
+      } finally {
+        _resetDbForTesting();
+      }
+    }),
+  );
 });

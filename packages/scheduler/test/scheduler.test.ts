@@ -5,6 +5,7 @@
 // that persist via upsertEvents; verify insertGdeltEvents is GONE from all paths.
 // T-18: tests updated to cover gkg(medium) job that persists via upsertSignals.
 // T-24: tests updated to cover cii(medium) job that persists via insertCiiSnapshots.
+// T-37: tests updated to cover sanctions(slow) job that persists via insertSanctions.
 //
 // Run via:
 //   node --import tsx --test packages/scheduler/test/scheduler.test.ts
@@ -20,7 +21,7 @@ import {
   type ConnectorResult,
 } from '../src/index.js';
 
-import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section, CiiSnapshotRow, ConvergenceSignalRow } from '@www/store';
+import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '@www/store';
 import type { CiiScore } from '@www/core-cii';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -82,23 +83,26 @@ interface MockOptions {
   emptyEonet?: boolean;
   emptyGdelt?: boolean;
   emptyGkg?: boolean;
+  emptySanctions?: boolean;
 }
 
 interface TrackingDeps extends SchedulerDeps {
   // tracking counters
-  fetchMarketsCalled: number;
-  fetchUsgsCalled:    number;
-  fetchEonetCalled:   number;
-  fetchGdeltCalled:   number;
-  fetchGkgCalled:     number;
-  fetchNewsCalled:    number;
-  insertedMarkets:    MarketSnapshot[];
-  upsertedEvents:     EventRow[];
-  upsertedSignals:    SignalRow[];
-  insertedNews:       NewsItem[];
-  briefingCalled:     number;
-  purgeCalled:        number;
-  purgeCalledWithMs:  number[];
+  fetchMarketsCalled:    number;
+  fetchUsgsCalled:       number;
+  fetchEonetCalled:      number;
+  fetchGdeltCalled:      number;
+  fetchGkgCalled:        number;
+  fetchSanctionsCalled:  number;
+  fetchNewsCalled:       number;
+  insertedMarkets:       MarketSnapshot[];
+  upsertedEvents:        EventRow[];
+  upsertedSignals:       SignalRow[];
+  insertedNews:          NewsItem[];
+  insertedSanctions:     SanctionRow[];
+  briefingCalled:        number;
+  purgeCalled:           number;
+  purgeCalledWithMs:     number[];
 }
 
 function makeDeps(opts: MockOptions = {}): TrackingDeps {
@@ -108,12 +112,14 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
     fetchUsgsCalled:    0,
     fetchEonetCalled:   0,
     fetchGdeltCalled:   0,
-    fetchGkgCalled:     0,
-    fetchNewsCalled:    0,
+    fetchGkgCalled:       0,
+    fetchSanctionsCalled: 0,
+    fetchNewsCalled:      0,
     insertedMarkets:    [],
     upsertedEvents:     [],
     upsertedSignals:    [],
     insertedNews:       [],
+    insertedSanctions:  [],
     briefingCalled:     0,
     purgeCalled:        0,
     purgeCalledWithMs:  [],
@@ -199,6 +205,16 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
       };
     },
 
+    async fetchSanctions(): Promise<ConnectorResult<SanctionRow>> {
+      tracking.fetchSanctionsCalled++;
+      if (opts.emptySanctions) return { data: [], stale: false, fetchedAt: Date.now() };
+      return {
+        data:      [{ country: 'Russia', sanctionedCount: 5000, capturedAt: Date.now() }],
+        stale:     false,
+        fetchedAt: Date.now(),
+      };
+    },
+
     // ── Store mocks ───────────────────────────────────────────────────────
     async insertMarketSnapshots(rows: MarketSnapshot[]): Promise<void> {
       tracking.insertedMarkets.push(...rows);
@@ -214,6 +230,10 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
 
     async insertNewsItems(rows: NewsItem[]): Promise<void> {
       tracking.insertedNews.push(...rows);
+    },
+
+    async insertSanctions(rows: SanctionRow[]): Promise<void> {
+      tracking.insertedSanctions.push(...rows);
     },
 
     async purgeAndDownsample(beforeMs: number): Promise<void> {
@@ -426,20 +446,21 @@ describe('createScheduler', () => {
 
 describe('defaultJobs', () => {
   // T-11: 6 jobs; T-18: 7 jobs; T-24: now 8 jobs (+cii medium, D-211)
-  it('returns exactly 8 jobs: markets/usgs/eonet/gdelt/gkg/cii/news/daily', () => {
+  it('returns exactly 9 jobs: markets/usgs/eonet/gdelt/gkg/cii/news/sanctions/daily', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
-    assert.equal(jobs.length, 8, `Expected 8 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
+    assert.equal(jobs.length, 9, `Expected 9 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
 
     const names = jobs.map((j) => j.name);
-    assert.ok(names.includes('markets'), 'should include markets job');
-    assert.ok(names.includes('usgs'),    'should include usgs job');
-    assert.ok(names.includes('eonet'),   'should include eonet job');
-    assert.ok(names.includes('gdelt'),   'should include gdelt job');
-    assert.ok(names.includes('gkg'),     'should include gkg job');
-    assert.ok(names.includes('cii'),     'should include cii job');
-    assert.ok(names.includes('news'),    'should include news job');
-    assert.ok(names.includes('daily'),   'should include daily job');
+    assert.ok(names.includes('markets'),   'should include markets job');
+    assert.ok(names.includes('usgs'),      'should include usgs job');
+    assert.ok(names.includes('eonet'),     'should include eonet job');
+    assert.ok(names.includes('gdelt'),     'should include gdelt job');
+    assert.ok(names.includes('gkg'),       'should include gkg job');
+    assert.ok(names.includes('cii'),       'should include cii job');
+    assert.ok(names.includes('news'),      'should include news job');
+    assert.ok(names.includes('sanctions'), 'should include sanctions job');
+    assert.ok(names.includes('daily'),     'should include daily job');
   });
 
   // T-11: verify tier assignments per D-105; T-18: gkg=medium (D-204)
@@ -455,17 +476,42 @@ describe('defaultJobs', () => {
     assert.equal(byName['gkg']?.tier,     'medium', 'gkg must be medium tier (D-204)');
     assert.equal(byName['cii']?.tier,     'medium', 'cii must be medium tier (D-211)');
     assert.equal(byName['markets']?.tier, 'fast',   'markets must be fast tier');
-    assert.equal(byName['news']?.tier,    'slow',   'news must be slow tier');
-    assert.equal(byName['daily']?.tier,   'daily',  'daily must be daily tier');
+    assert.equal(byName['news']?.tier,      'slow',   'news must be slow tier');
+    assert.equal(byName['sanctions']?.tier, 'slow',   'sanctions must be slow tier (T-37)');
+    assert.equal(byName['daily']?.tier,     'daily',  'daily must be daily tier');
   });
 
   // T-11: [markets, usgs, eonet, gdelt, news, daily]; T-18: +gkg
   // T-24: return order is [markets, usgs, eonet, gdelt, gkg, cii, news, daily]
-  it('job order is [markets, usgs, eonet, gdelt, gkg, cii, news, daily]', () => {
+  it('job order is [markets, usgs, eonet, gdelt, gkg, cii, news, sanctions, daily]', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
     const order = jobs.map((j) => j.name);
-    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'cii', 'news', 'daily']);
+    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'cii', 'news', 'sanctions', 'daily']);
+  });
+
+  // T-37: sanctions job (slow) → fetchSanctions + insertSanctions
+  it('sanctions job: fetchSanctions() llamado → insertSanctions con los datos', async () => {
+    const deps = makeDeps();
+    const jobs = defaultJobs(undefined, deps);
+    const sanctionsJob = jobs.find((j) => j.name === 'sanctions');
+    assert.ok(sanctionsJob, 'sanctions job not found');
+    assert.equal(sanctionsJob.tier, 'slow', 'sanctions debe ser tier slow');
+
+    await sanctionsJob.run();
+
+    assert.equal(deps.fetchSanctionsCalled, 1, 'fetchSanctions llamado una vez');
+    assert.equal(deps.insertedSanctions.length, 1, '1 fila de sanciones insertada');
+    assert.equal(deps.insertedSanctions[0]?.country, 'Russia');
+  });
+
+  it('sanctions job: data vacía → NO inserta', async () => {
+    const deps = makeDeps({ emptySanctions: true });
+    const jobs = defaultJobs(undefined, deps);
+    const sanctionsJob = jobs.find((j) => j.name === 'sanctions');
+    await sanctionsJob!.run();
+    assert.equal(deps.fetchSanctionsCalled, 1);
+    assert.equal(deps.insertedSanctions.length, 0, 'sin datos → no inserta');
   });
 
   // ── T-31: convergencia encadenada dentro del job cii (C-4/D-312) ──────────

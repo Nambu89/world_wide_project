@@ -2,6 +2,7 @@
 // @www/scheduler — T-11 implementation (Wave C, Fase 2 global-events)
 //                  T-18: gkg job (medium tier) — signals pipeline
 //                  T-24: cii job (medium tier) — CII scoring pipeline
+//                  T-37: sanctions job (slow tier) — OFAC sanctions pipeline
 //
 // ADR-004/D-003: scheduler server-side; fetch connector → persist in store BEFORE serving.
 // D-105: 4 tiers by volatility. Intervals are CONFIGURABLE (passed via cfg / Job.intervalMs),
@@ -24,6 +25,13 @@
 //   - REAL_STORE_AI_DEPS: adds getPriorCii + insertCiiSnapshots.
 //   - defaultJobs: adds cii (medium) job after gkg.
 //   - Return order: [markets, usgs, eonet, gdelt, gkg, cii, news, daily].
+// T-37 changes:
+//   - SchedulerDeps: adds fetchSanctions (SanctionRow) + insertSanctions.
+//   - ConnectorDeps: adds 'fetchSanctions'.
+//   - REAL_STORE_AI_DEPS: adds insertSanctions.
+//   - loadDefaultConnectors: adds fetchSanctions.
+//   - defaultJobs: adds sanctions (slow) job after news.
+//   - Return order: [markets, usgs, eonet, gdelt, gkg, cii, news, sanctions, daily].
 
 import {
   insertMarketSnapshots,
@@ -33,6 +41,7 @@ import {
   insertCiiSnapshots,
   getPriorCii,
   insertConvergenceSignals,
+  insertSanctions,
   purgeAndDownsample,
   type MarketSnapshot,
   type NewsItem,
@@ -40,6 +49,7 @@ import {
   type SignalRow,
   type CiiSnapshotRow,
   type ConvergenceSignalRow,
+  type SanctionRow,
 } from '@www/store';
 
 import { generateDailyBriefing } from '@www/core-ai';
@@ -175,14 +185,16 @@ export interface SchedulerDeps {
   fetchUsgs:    () => Promise<ConnectorResult<EventRow>>;
   fetchEonet:   () => Promise<ConnectorResult<EventRow>>;
   fetchGdelt:   () => Promise<ConnectorResult<EventRow>>;
-  fetchGkg:     () => Promise<ConnectorResult<SignalRow>>;
-  fetchNews:    () => Promise<ConnectorResult<NewsItem>>;
+  fetchGkg:        () => Promise<ConnectorResult<SignalRow>>;
+  fetchSanctions:  () => Promise<ConnectorResult<SanctionRow>>;
+  fetchNews:       () => Promise<ConnectorResult<NewsItem>>;
 
   // Store writes (@www/store) — defaults to real implementations
   insertMarketSnapshots: (rows: MarketSnapshot[])    => Promise<void>;
   upsertEvents:          (rows: EventRow[])           => Promise<void>;
   upsertSignals:         (rows: SignalRow[])           => Promise<void>;
   insertNewsItems:       (rows: NewsItem[])            => Promise<void>;
+  insertSanctions:       (rows: SanctionRow[])         => Promise<void>;
   purgeAndDownsample:    (beforeMs: number)            => Promise<void>;
 
   // CII pipeline (@www/core-cii + @www/store) — T-24
@@ -202,7 +214,7 @@ export interface SchedulerDeps {
 // ConnectorDeps type alias (backwards compat — server.ts uses SchedulerDeps directly)
 export type ConnectorDeps = Pick<
   SchedulerDeps,
-  'fetchMarkets' | 'fetchUsgs' | 'fetchEonet' | 'fetchGdelt' | 'fetchGkg' | 'fetchNews'
+  'fetchMarkets' | 'fetchUsgs' | 'fetchEonet' | 'fetchGdelt' | 'fetchGkg' | 'fetchSanctions' | 'fetchNews'
 >;
 
 /**
@@ -217,6 +229,7 @@ const REAL_STORE_AI_DEPS: Pick<
   | 'upsertEvents'
   | 'upsertSignals'
   | 'insertNewsItems'
+  | 'insertSanctions'
   | 'purgeAndDownsample'
   | 'computeAllCountries'
   | 'getPriorCii'
@@ -229,6 +242,7 @@ const REAL_STORE_AI_DEPS: Pick<
   upsertEvents,
   upsertSignals,
   insertNewsItems,
+  insertSanctions,
   purgeAndDownsample,
   computeAllCountries,
   getPriorCii,
@@ -247,12 +261,13 @@ async function loadDefaultConnectors(): Promise<ConnectorDeps> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod = await import('@www/connectors') as any;
   return {
-    fetchMarkets: mod.fetchMarkets as ConnectorDeps['fetchMarkets'],
-    fetchUsgs:    mod.fetchUsgs    as ConnectorDeps['fetchUsgs'],
-    fetchEonet:   mod.fetchEonet   as ConnectorDeps['fetchEonet'],
-    fetchGdelt:   mod.fetchGdelt   as ConnectorDeps['fetchGdelt'],
-    fetchGkg:     mod.fetchGkg     as ConnectorDeps['fetchGkg'],
-    fetchNews:    mod.fetchNews    as ConnectorDeps['fetchNews'],
+    fetchMarkets:    mod.fetchMarkets    as ConnectorDeps['fetchMarkets'],
+    fetchUsgs:       mod.fetchUsgs       as ConnectorDeps['fetchUsgs'],
+    fetchEonet:      mod.fetchEonet      as ConnectorDeps['fetchEonet'],
+    fetchGdelt:      mod.fetchGdelt      as ConnectorDeps['fetchGdelt'],
+    fetchGkg:        mod.fetchGkg        as ConnectorDeps['fetchGkg'],
+    fetchSanctions:  mod.fetchSanctions  as ConnectorDeps['fetchSanctions'],
+    fetchNews:       mod.fetchNews       as ConnectorDeps['fetchNews'],
   };
 }
 
@@ -260,7 +275,7 @@ async function loadDefaultConnectors(): Promise<ConnectorDeps> {
 
 /**
  * Builds the production jobs:
- *   markets (fast) · usgs (fast) · eonet (medium) · gdelt (medium) · gkg (medium) · cii (medium) · news (slow) · daily
+ *   markets (fast) · usgs (fast) · eonet (medium) · gdelt (medium) · gkg (medium) · cii (medium) · news (slow) · sanctions (slow) · daily
  *
  * T-11: gdelt-financial job (insertGdeltEvents → gdelt_events) REPLACED by gdelt-events
  * job (upsertEvents → events). usgs + eonet jobs ADDED. Order: [markets, usgs, eonet,
@@ -269,6 +284,8 @@ async function loadDefaultConnectors(): Promise<ConnectorDeps> {
  * Order: [markets, usgs, eonet, gdelt, gkg, news, daily].
  * T-24: cii job (medium tier, insertCiiSnapshots) ADDED after gkg (D-211).
  * Order: [markets, usgs, eonet, gdelt, gkg, cii, news, daily].
+ * T-37: sanctions job (slow tier, insertSanctions) ADDED after news.
+ * Order: [markets, usgs, eonet, gdelt, gkg, cii, news, sanctions, daily].
  *
  * @param cfg  - override any tier's interval in ms.
  * @param deps - inject mocks for testing (optional; defaults load from @www/connectors + real store/ai).
@@ -471,6 +488,29 @@ export function defaultJobs(
     },
   };
 
+  // ── sanctions job (slow tier) — T-37: OFAC sanctions pipeline ───────────
+  // D-105: sanctions change slowly; slow tier (30 min) matches news.
+  // ADR-004: persist BEFORE serving — insertSanctions before any read.
+  const sanctionsJob: Job = {
+    name: 'sanctions',
+    tier: 'slow',
+    intervalMs: intervals.slow,
+    async run() {
+      const connectors = deps?.fetchSanctions
+        ? { fetchSanctions: deps.fetchSanctions }
+        : await loadDefaultConnectors();
+      const result = await connectors.fetchSanctions();
+      if (result.data.length > 0) {
+        await storeAi.insertSanctions(result.data);
+        console.log(
+          `[scheduler] sanctions: persisted ${result.data.length} rows (stale=${result.stale})`,
+        );
+      } else {
+        console.warn('[scheduler] sanctions: connector returned empty data — skipping insert');
+      }
+    },
+  };
+
   // ── news job (slow tier) ──────────────────────────────────────────────────
   const newsJob: Job = {
     name: 'news',
@@ -521,5 +561,6 @@ export function defaultJobs(
   // T-11 order: markets · usgs · eonet · gdelt · news · daily
   // T-18 order: markets · usgs · eonet · gdelt · gkg · news · daily
   // T-24 order: markets · usgs · eonet · gdelt · gkg · cii · news · daily
-  return [marketsJob, usgsJob, eonetJob, gdeltJob, gkgJob, ciiJob, newsJob, dailyJob];
+  // T-37 order: markets · usgs · eonet · gdelt · gkg · cii · news · sanctions · daily
+  return [marketsJob, usgsJob, eonetJob, gdeltJob, gkgJob, ciiJob, newsJob, sanctionsJob, dailyJob];
 }

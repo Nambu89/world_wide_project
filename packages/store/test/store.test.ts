@@ -35,8 +35,10 @@ import {
   insertConvergenceSignals,
   getLatestConvergence,
   getPriorConvergence,
+  insertSanctions,
+  getLatestSanctions,
 } from '../src/index.js';
-import type { EventRow, CiiSnapshotRow, ConvergenceSignalRow } from '../src/index.js';
+import type { EventRow, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '../src/index.js';
 
 function makeInMemoryClient(): LibsqlClient {
   return createClient({ url: ':memory:' });
@@ -1425,5 +1427,171 @@ describe('purgeAndDownsample() — purges convergence_signals, cii_snapshots int
     const cii = await getLatestCii();
     const ly = cii.find((r) => r.country === 'LY');
     assert.ok(ly !== undefined, 'LY CII snapshot survives convergence purge step');
+  });
+});
+
+// ─── Helpers for Sanctions tests ─────────────────────────────────────────────
+
+function makeSanction(overrides: Partial<SanctionRow> & { country: string; capturedAt: number }): SanctionRow {
+  return {
+    country: overrides.country,
+    sanctionedCount: overrides.sanctionedCount ?? 10,
+    capturedAt: overrides.capturedAt,
+  };
+}
+
+// ─── Suite 26: migrate() — migration 006_sanctions idempotent (HAZARD W-2) ───
+
+describe('migrate() — migration 006_sanctions.sql (T-35, HAZARD W-2)', () => {
+  it('creates sanctions table and ix_sanctions_country_time index — idempotent 3x', async () => {
+    const client = makeInMemoryClient();
+
+    await runMigrations(client);
+    await runMigrations(client);
+    await runMigrations(client);
+
+    // Assert table exists via sqlite_master (catches HAZARD W-2: silent discard of CREATE)
+    const tableResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE name='sanctions'",
+    );
+    assert.equal(tableResult.rows.length, 1, 'sanctions table created');
+
+    // Assert index exists
+    const indexResult = await client.execute(
+      "SELECT name FROM sqlite_master WHERE name='ix_sanctions_country_time'",
+    );
+    assert.equal(indexResult.rows.length, 1, 'ix_sanctions_country_time index exists');
+
+    // Migration 006 recorded exactly once
+    const mig006 = await client.execute(
+      "SELECT id FROM _migrations WHERE id = '006_sanctions.sql'",
+    );
+    assert.equal(mig006.rows.length, 1, '006_sanctions.sql recorded exactly once');
+
+    // Prior tables still intact (additive only)
+    for (const tbl of ['convergence_signals', 'cii_snapshots', 'events', 'signals']) {
+      const r = await client.execute({
+        sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        args: [tbl],
+      });
+      assert.equal(r.rows.length, 1, `${tbl} table still exists (not touched by 006)`);
+    }
+  });
+});
+
+// ─── Suite 27: insertSanctions + getLatestSanctions ───────────────────────────
+
+describe('insertSanctions() + getLatestSanctions()', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+  });
+
+  it('inserts and reads back a sanctions row (round-trip)', async () => {
+    const now = Date.now();
+    await insertSanctions([
+      makeSanction({ country: 'Russia', sanctionedCount: 850, capturedAt: now }),
+    ]);
+
+    const rows = await getLatestSanctions();
+    const ru = rows.find((r) => r.country === 'Russia');
+    assert.ok(ru !== undefined, 'Russia row present');
+    assert.equal(ru.sanctionedCount, 850, 'sanctionedCount correct');
+    assert.equal(ru.capturedAt, now, 'capturedAt correct');
+    assert.ok(ru.id !== undefined && ru.id > 0, 'id assigned by DB');
+  });
+
+  it('getLatestSanctions returns 1 row per country — the most recent snapshot (>=2 captured_at)', async () => {
+    const now = Date.now();
+    const earlier = now - 30_000;
+
+    // Two snapshots for Iran — only the later one should appear in getLatestSanctions
+    await insertSanctions([
+      makeSanction({ country: 'Iran', sanctionedCount: 400, capturedAt: earlier }),
+      makeSanction({ country: 'Iran', sanctionedCount: 450, capturedAt: now }),
+    ]);
+
+    const rows = await getLatestSanctions();
+    const iranRows = rows.filter((r) => r.country === 'Iran');
+    assert.equal(iranRows.length, 1, 'only 1 Iran row from getLatestSanctions');
+    assert.equal(iranRows[0]?.sanctionedCount, 450, 'Iran shows the most recent count (450)');
+  });
+
+  it('returns multiple countries — one row per country', async () => {
+    const now = Date.now();
+    await insertSanctions([
+      makeSanction({ country: 'North Korea', sanctionedCount: 120, capturedAt: now }),
+      makeSanction({ country: 'Syria', sanctionedCount: 200, capturedAt: now }),
+    ]);
+
+    const rows = await getLatestSanctions();
+    const countries = rows.map((r) => r.country);
+    assert.ok(countries.includes('North Korea'), 'North Korea row present');
+    assert.ok(countries.includes('Syria'), 'Syria row present');
+  });
+
+  it('handles empty array without error', async () => {
+    await insertSanctions([]); // must not throw
+  });
+});
+
+// ─── Suite 28: purgeAndDownsample — purges sanctions, convergence_signals intact ─
+
+describe('purgeAndDownsample() — purges sanctions, convergence_signals intact', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    // Old sanctions row — should be purged
+    await insertSanctions([
+      makeSanction({ country: 'Cuba', capturedAt: cutoff - 2000, sanctionedCount: 50 }),
+    ]);
+    // Recent sanctions row — should survive
+    await insertSanctions([
+      makeSanction({ country: 'Cuba', capturedAt: now, sanctionedCount: 55 }),
+    ]);
+
+    // Convergence signal — must NOT be purged by the sanctions purge step
+    await insertConvergenceSignals([
+      makeConvergence({ country: 'Cuba', capturedAt: now }),
+    ]);
+  });
+
+  it('purges sanctions older than beforeMs', async () => {
+    const now = Date.now();
+    const cutoff = now - 5_000;
+
+    await purgeAndDownsample(cutoff);
+
+    const rows = await getLatestSanctions();
+    const cubaRows = rows.filter((r) => r.country === 'Cuba');
+    assert.equal(cubaRows.length, 1, 'only 1 Cuba sanctions row survives (the recent one)');
+    assert.ok((cubaRows[0]?.capturedAt ?? 0) >= cutoff, 'surviving row is recent');
+    assert.equal(cubaRows[0]?.sanctionedCount, 55, 'surviving row has count=55');
+  });
+
+  it('convergence_signals are NOT purged by the sanctions purge step', async () => {
+    const rows = await getLatestConvergence();
+    const cuba = rows.find((r) => r.country === 'Cuba');
+    assert.ok(cuba !== undefined, 'Cuba convergence signal survives sanctions purge step');
+  });
+
+  it('other tables (events, cii_snapshots) NOT touched by sanctions purge', async () => {
+    const { getDb } = await import('../src/index.js');
+    const db = getDb();
+    // Verify the sanctions table exists but other tables are untouched
+    const sanctionsTable = await db.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='sanctions'",
+    );
+    assert.equal(sanctionsTable.rows.length, 1, 'sanctions table exists');
+    const ciiTable = await db.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='cii_snapshots'",
+    );
+    assert.equal(ciiTable.rows.length, 1, 'cii_snapshots table still intact');
   });
 });

@@ -6,10 +6,10 @@
 import type { Client as LibsqlClient } from '@libsql/client';
 import { getDb, _resetDbForTesting } from './db.js';
 import { migrate as runMigrations } from './migrate.js';
-import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow } from './types.js';
+import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from './types.js';
 
 // Re-export types so consumers don't need a separate import
-export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow } from './types.js';
+export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from './types.js';
 
 // ─── DB singleton ────────────────────────────────────────────────────────────
 
@@ -641,6 +641,12 @@ export async function purgeAndDownsample(beforeMs: number): Promise<void> {
     sql: 'DELETE FROM convergence_signals WHERE captured_at < ?',
     args: [beforeMs],
   });
+
+  // Step 8 — Purge sanctions older than beforeMs (T-35).
+  await client.execute({
+    sql: 'DELETE FROM sanctions WHERE captured_at < ?',
+    args: [beforeMs],
+  });
 }
 
 // ─── CII Snapshots API (T-21) ─────────────────────────────────────────────────
@@ -839,6 +845,55 @@ function rowToConvergenceSignalRow(r: Record<string, unknown>): ConvergenceSigna
     dynamicScore: r['dynamic_score'] != null ? Number(r['dynamic_score']) : null,
     methodologyVersion: String(r['methodology_version']),
     firstDetectedAt: Number(r['first_detected_at']),
+    capturedAt: Number(r['captured_at']),
+  };
+  if (r['id'] != null) {
+    base.id = Number(r['id']);
+  }
+  return base;
+}
+
+// ─── Sanctions API (T-35, OFAC Approach B) ───────────────────────────────────
+
+/**
+ * Appends sanctions snapshot rows — INSERT only (no upsert; sanctions is a time-series).
+ * No-op for empty arrays.
+ */
+export async function insertSanctions(rows: SanctionRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const client = getDb();
+  for (const row of rows) {
+    await client.execute({
+      sql: `INSERT INTO sanctions (country, sanctioned_count, captured_at)
+            VALUES (?, ?, ?)`,
+      args: [row.country, row.sanctionedCount, row.capturedAt],
+    });
+  }
+}
+
+/**
+ * Returns the most recent sanctions snapshot per country (1 row per country, MAX captured_at).
+ * UI / briefing reads from the local DB — never from upstream (ADR-004/D-003).
+ */
+export async function getLatestSanctions(): Promise<SanctionRow[]> {
+  const client = getDb();
+  const result = await client.execute(`
+    SELECT s.*
+    FROM sanctions s
+    INNER JOIN (
+      SELECT country, MAX(captured_at) AS max_ts
+      FROM sanctions
+      GROUP BY country
+    ) latest ON s.country = latest.country AND s.captured_at = latest.max_ts
+    ORDER BY s.country
+  `);
+  return result.rows.map(rowToSanctionRow);
+}
+
+function rowToSanctionRow(r: Record<string, unknown>): SanctionRow {
+  const base: SanctionRow = {
+    country: String(r['country']),
+    sanctionedCount: Number(r['sanctioned_count']),
     capturedAt: Number(r['captured_at']),
   };
   if (r['id'] != null) {

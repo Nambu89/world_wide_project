@@ -11,4 +11,6 @@ export { fetchEonet } from './geo/eonet.js';
 export { fetchGdelt } from './geo/gdelt.js';
 // Radar Geoeconómico Temático (Fase 2 rebanada 2): conector GKG → SignalRow (tabla signals).
 export { fetchGkg } from './geo/gkg.js';
+// Sanciones OFAC por país (Fase 2 Approach B — T-36): conector keyless OpenSanctions CC BY-NC.
+export { fetchSanctions } from './finance/sanctions.js';
 export type { ConnectorResult } from './types.js';

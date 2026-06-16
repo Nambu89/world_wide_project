@@ -167,6 +167,21 @@ export interface ConvergenceSignalRow {
   capturedAt: number;
 }
 
+// ─── Sanctions (T-35, OFAC Approach B) ───────────────────────────────────────
+
+/**
+ * OFAC sanctions snapshot row — camelCase (L-1: web wire is camelCase).
+ * Persisted as a time-series append in `sanctions` (migration 006).
+ * sanctionedCount: number of SDN-list entities linked to this country.
+ * capturedAt: epoch ms of the scheduler snapshot.
+ */
+export interface SanctionRow {
+  id?: number;
+  country: string;
+  sanctionedCount: number;
+  capturedAt: number;
+}
+
 // ─── CII Snapshots (T-21, ADR-CII) ───────────────────────────────────────────
 
 /**

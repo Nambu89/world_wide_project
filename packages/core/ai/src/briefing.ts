@@ -22,12 +22,14 @@ import {
   getEvents,
   getLatestCii,
   getLatestConvergence,
+  getLatestSanctions,
   migrate,
   type MarketSnapshot,
   type EventRow,
   type EventFilter,
   type CiiSnapshotRow,
   type ConvergenceSignalRow,
+  type SanctionRow,
   type Briefing,
 } from '@www/store';
 import { complete, pickProvider } from './router.js';
@@ -173,6 +175,26 @@ export function buildConvergenceContext(latest: ConvergenceSignalRow[]): string 
   return [`Señales de convergencia activas (top ${top.length}):`, ...lines].join('\n');
 }
 
+// ─── Sanctions context (T-38) ─────────────────────────────────────────────────
+
+const SANCTIONS_TOP_N = 10;
+
+/**
+ * Construye un bloque de texto con los top-N países por sanctionedCount desc.
+ *
+ * Formato: 'Países bajo más sanciones OFAC: <país> (<N>), …'
+ *
+ * @returns '' si la lista está vacía (el bloque se omite en serializeContext). D-005/D-311.
+ */
+export function buildSanctionsContext(latest: SanctionRow[]): string {
+  if (latest.length === 0) return '';
+
+  const sorted = [...latest].sort((a, b) => b.sanctionedCount - a.sanctionedCount);
+  const top = sorted.slice(0, SANCTIONS_TOP_N);
+  const entries = top.map((s) => `${s.country} (${s.sanctionedCount})`).join(', ');
+  return `Países bajo más sanciones OFAC: ${entries}`;
+}
+
 // ─── Context serialization ────────────────────────────────────────────────────
 
 /**
@@ -187,12 +209,14 @@ export function buildConvergenceContext(latest: ConvergenceSignalRow[]): string 
  * @param events       - eventos globales recientes de la tabla events (de getEvents)
  * @param cii          - últimos snapshots CII por país (de getLatestCii); T-27, opcional
  * @param convergence  - señales de convergencia activas (de getLatestConvergence); T-32, opcional
+ * @param sanctions    - sanciones OFAC más recientes por país (de getLatestSanctions); T-38, opcional
  */
 export function serializeContext(
   latest: MarketSnapshot[],
   events: EventRow[],
   cii: CiiSnapshotRow[] = [],
   convergence: ConvergenceSignalRow[] = [],
+  sanctions: SanctionRow[] = [],
 ): string {
   const now = new Date().toISOString();
   const lines: string[] = [`Fecha de generación: ${now}`];
@@ -227,6 +251,12 @@ export function serializeContext(
   const convBlock = buildConvergenceContext(convergence);
   if (convBlock !== '') {
     lines.push(convBlock);
+  }
+
+  // Sanciones OFAC — T-38. Se omite si la lista está vacía.
+  const sanctionsBlock = buildSanctionsContext(sanctions);
+  if (sanctionsBlock !== '') {
+    lines.push(sanctionsBlock);
   }
 
   return lines.join('\n');
@@ -276,6 +306,7 @@ export async function generateDailyBriefing(): Promise<Briefing> {
   let events: EventRow[] = [];
   let cii: CiiSnapshotRow[] = [];
   let convergence: ConvergenceSignalRow[] = [];
+  let sanctions: SanctionRow[] = [];
 
   try {
     latest = await getLatestMarkets();
@@ -293,15 +324,20 @@ export async function generateDailyBriefing(): Promise<Briefing> {
     // El job de convergencia lo popula; aquí solo leemos (D-105).
     // Vacío → el bloque se omite hasta que haya datos.
     convergence = await getLatestConvergence();
+    // Sanciones OFAC (T-38): último snapshot por país.
+    // El job de sanciones lo popula; aquí solo leemos (D-105).
+    // Vacío → el bloque se omite hasta que haya datos.
+    sanctions = await getLatestSanctions();
   } catch {
     // Si el store falla, degradamos con contexto vacío
     latest = [];
     events = [];
     cii = [];
     convergence = [];
+    sanctions = [];
   }
 
-  const ctx = serializeContext(latest, events, cii, convergence);
+  const ctx = serializeContext(latest, events, cii, convergence, sanctions);
   const prompt = buildBriefingPrompt(ctx);
 
   // 3. Generación LLM con degradación (R-2)
