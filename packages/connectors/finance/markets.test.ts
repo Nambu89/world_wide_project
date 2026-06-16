@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 
 // ─── Mock global de fetch (sin red) ──────────────────────────────────────────
 
-type FetchBehavior = 'ok-v8' | 'ok-v6' | 'fail-network' | 'fail-status' | 'bad-json' | 'bad-schema';
+type FetchBehavior = 'ok-v8' | 'ok-v8-derive' | 'ok-v6' | 'fail-network' | 'fail-status' | 'bad-json' | 'bad-schema';
 
 let _fetchBehavior: FetchBehavior = 'ok-v8';
 
@@ -25,6 +25,22 @@ const MOCK_V8_RESPONSE = {
           symbol: 'SPY',
           regularMarketPrice: 523.45,
           regularMarketChangePercent: 0.42,
+          instrumentType: 'ETF',
+        },
+      },
+    ],
+  },
+};
+
+// v8 chart meta SIN regularMarketChangePercent (caso real de Yahoo) → debe derivar de chartPreviousClose.
+const MOCK_V8_DERIVE_RESPONSE = {
+  chart: {
+    result: [
+      {
+        meta: {
+          symbol: 'SPY',
+          regularMarketPrice: 754.83,
+          chartPreviousClose: 741.75,
           instrumentType: 'ETF',
         },
       },
@@ -73,8 +89,9 @@ function installMockFetch(behavior: FetchBehavior): void {
       });
     }
 
-    if (_fetchBehavior === 'ok-v8' && url.includes('/v8/finance/chart')) {
-      return new Response(JSON.stringify(MOCK_V8_RESPONSE), {
+    if ((_fetchBehavior === 'ok-v8' || _fetchBehavior === 'ok-v8-derive') && url.includes('/v8/finance/chart')) {
+      const body = _fetchBehavior === 'ok-v8-derive' ? MOCK_V8_DERIVE_RESPONSE : MOCK_V8_RESPONSE;
+      return new Response(JSON.stringify(body), {
         status: 200,
         headers: { 'content-type': 'application/json', etag: '"etag-v8-spy"' },
       });
@@ -223,6 +240,19 @@ describe('fetchMarkets — datos parseados correctamente (v8 mock)', () => {
     }
     // Si está vacío (DB vacía + upstream mock falló por orden de símbolos) — sigue siendo válido
     assert.ok(Array.isArray(result.data));
+  });
+
+  it('v8 sin regularMarketChangePercent: deriva change_pct de chartPreviousClose', async () => {
+    installMockFetch('ok-v8-derive');
+    const result = await fetchMarkets();
+    assert.ok(result.data.length > 0, 'debe haber snapshots');
+    const snap = result.data[0] as Record<string, unknown>;
+    const expected = ((754.83 - 741.75) / 741.75) * 100; // ≈ 1.7635
+    assert.equal(typeof snap['change_pct'], 'number', 'change_pct derivado debe ser number, no null');
+    assert.ok(
+      Math.abs((snap['change_pct'] as number) - expected) < 1e-6,
+      `change_pct=${snap['change_pct']} esperado≈${expected}`,
+    );
   });
 });
 

@@ -276,7 +276,10 @@ function parseYahooV8Response(
   const price = toFiniteNumber(meta['regularMarketPrice']);
   if (price === null) return null;
 
-  const changePct = toFiniteNumber(meta['regularMarketChangePercent']) ?? null;
+  // Yahoo v8 chart meta suele OMITIR regularMarketChangePercent → derivar de chartPreviousClose.
+  const prevClose = toFiniteNumber(meta['chartPreviousClose']) ?? toFiniteNumber(meta['previousClose']);
+  const changePct = toFiniteNumber(meta['regularMarketChangePercent'])
+    ?? (prevClose !== null && prevClose !== 0 ? ((price - prevClose) / prevClose) * 100 : null);
   const instrumentType = typeof meta['instrumentType'] === 'string'
     ? meta['instrumentType']
     : 'UNKNOWN';

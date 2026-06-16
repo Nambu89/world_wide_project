@@ -87,4 +87,63 @@ export const COUNTRY_CENTROIDS: Record<string, { lat: number; lon: number }> = {
   // Oceanía
   Australia: { lat: -25.3, lon: 133.8 },
   "New Zealand": { lat: -40.9, lon: 174.9 },
+
+  // ── Cobertura ampliada: países que el motor CII/convergencia produce (GDELT) ──
+  // Hotspots + resto de FIPS sin centroide → dejan de ser panel-only en el mapa.
+  // (convergence-debt 2026-06-16; centroides aproximados nivel-país, dominio público).
+  // Oriente Medio
+  Syria: { lat: 35.0, lon: 38.0 },
+  Lebanon: { lat: 33.9, lon: 35.9 },
+  Jordan: { lat: 31.2, lon: 36.5 },
+  Oman: { lat: 21.0, lon: 57.0 },
+  Bahrain: { lat: 26.0, lon: 50.5 },
+  Cyprus: { lat: 35.1, lon: 33.4 },
+  // África
+  Sudan: { lat: 15.5, lon: 30.2 },
+  Somalia: { lat: 5.2, lon: 46.2 },
+  Chad: { lat: 15.5, lon: 18.7 },
+  Cameroon: { lat: 5.7, lon: 12.7 },
+  "Congo (Kinshasa)": { lat: -4.0, lon: 21.8 },
+  "Congo (Brazzaville)": { lat: -0.8, lon: 15.2 },
+  Djibouti: { lat: 11.8, lon: 42.6 },
+  Gambia: { lat: 13.4, lon: -15.3 },
+  Guinea: { lat: 9.9, lon: -9.7 },
+  Liberia: { lat: 6.4, lon: -9.4 },
+  Malawi: { lat: -13.3, lon: 34.3 },
+  Namibia: { lat: -22.0, lon: 18.5 },
+  Rwanda: { lat: -1.9, lon: 29.9 },
+  Senegal: { lat: 14.5, lon: -14.5 },
+  Tanzania: { lat: -6.4, lon: 34.9 },
+  Uganda: { lat: 1.4, lon: 32.3 },
+  Zimbabwe: { lat: -19.0, lon: 29.9 },
+  Benin: { lat: 9.3, lon: 2.3 },
+  // Asia / Cáucaso / Asia Central
+  Afghanistan: { lat: 33.9, lon: 67.7 },
+  "Sri Lanka": { lat: 7.9, lon: 80.7 },
+  Nepal: { lat: 28.4, lon: 84.1 },
+  Philippines: { lat: 12.9, lon: 121.8 },
+  Cambodia: { lat: 12.6, lon: 104.9 },
+  Brunei: { lat: 4.5, lon: 114.7 },
+  Kazakhstan: { lat: 48.0, lon: 67.0 },
+  Kyrgyzstan: { lat: 41.2, lon: 74.8 },
+  Uzbekistan: { lat: 41.4, lon: 64.6 },
+  Turkmenistan: { lat: 39.0, lon: 59.6 },
+  Azerbaijan: { lat: 40.4, lon: 47.6 },
+  Armenia: { lat: 40.1, lon: 45.0 },
+  // Europa
+  Albania: { lat: 41.2, lon: 20.0 },
+  Estonia: { lat: 58.6, lon: 25.0 },
+  Kosovo: { lat: 42.6, lon: 20.9 },
+  Luxembourg: { lat: 49.8, lon: 6.1 },
+  Montenegro: { lat: 42.7, lon: 19.4 },
+  "North Macedonia": { lat: 41.6, lon: 21.7 },
+  Serbia: { lat: 44.0, lon: 21.0 },
+  Slovakia: { lat: 48.7, lon: 19.7 },
+  // Américas
+  Cuba: { lat: 21.5, lon: -79.5 },
+  "El Salvador": { lat: 13.8, lon: -88.9 },
+  Jamaica: { lat: 18.1, lon: -77.3 },
+  "Trinidad and Tobago": { lat: 10.7, lon: -61.2 },
+  // Oceanía (extra)
+  "Marshall Islands": { lat: 7.1, lon: 171.2 },
 };
