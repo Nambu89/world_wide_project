@@ -48,6 +48,7 @@ scope:
     - "NO modifiques server.ts wiring sin aprobacion (Regla 4)"
     - "NO toques .claude/hooks/"
 constraints:
+  - "Escalera ponytail (§9): la solucion mas simple que funciona (YAGNI->stdlib->nativo->dep-instalada->1 linea->minimo); marca atajos con // ponytail:"
   - "Sigue el patron de <ref-file:line>"
   - "TDD: los tests de la fase RED son INMUTABLES"
   - "AbortSignal.timeout(8000) en todo fetch de conector"
@@ -117,3 +118,24 @@ Decisiones base ya tomadas (lint de IDs unicos — un id ADR jamas se repite):
 ## 8. Frases de erosion de scope PROHIBIDAS (plan-checker las marca como ISSUE)
 
 `v1`, `version simplificada`, `placeholder`, `se cableara despues` / `will be wired later`, `implementacion basica`, `future enhancement`. Si no cabe -> `## PHASE SPLIT RECOMMENDED`, nunca dropear silenciosamente una decision bloqueada.
+
+---
+
+## 9. Escalera ponytail — minimalismo en TODO agente que PRODUCE codigo (OBLIGATORIO)
+
+> Metodologia **ponytail** (MIT, github.com/DietrichGebert/ponytail), condensada. **Fuente de verdad = el plugin** (`/ponytail-help`, skill `ponytail`); esto es el contrato propagado a los subagentes (que no heredan el hook del plugin). Aplica a **backend-architect, frontend-dev, data-connector-dev, intel-analyst, python-pro**. NO aplica a read-only (plan-checker/verifier), diseño/orquestacion (system-architect/pm-coordinator/codebase-navigator) ni qa-tester.
+
+**El mejor codigo es el que no se escribe.** ANTES de escribir codigo, para en el 1er peldaño que aguanta:
+
+1. **¿Necesita existir?** Necesidad especulativa = no lo construyas, dilo en una linea. (YAGNI)
+2. **¿Lo hace la stdlib?** Usala.
+3. **¿Una feature nativa de la plataforma lo cubre?** (`<input type="date">` sobre lib de picker, CSS sobre JS, constraint de DB sobre codigo de app). Usala.
+4. **¿Una dependencia YA instalada lo resuelve?** Usala. Nunca añadas una nueva para lo que resuelven unas lineas.
+5. **¿Puede ser una linea?** Una linea.
+6. **Solo entonces:** el minimo codigo que funciona.
+
+Reglas: sin abstracciones no pedidas (nada de interfaz con 1 implementacion, factory para 1 producto, config para un valor que nunca cambia). Sin boilerplate/scaffolding "para luego". **Deleción > adición. Aburrido > listo. Menos ficheros, diff más corto gana.** Entre dos opciones stdlib del mismo tamaño, la correcta en edge-cases (lazy = menos codigo, no el algoritmo más flojo). Marca simplificaciones deliberadas con `// ponytail:` nombrando el **techo + upgrade-path** (`// ponytail: global lock; per-account si importa el throughput`).
+
+**Cuando NO ser lazy** (nunca simplificar): validacion en trust-boundaries, error-handling que evita perdida de datos, seguridad, accesibilidad, lo **explicitamente pedido**, calibracion que el hardware real necesita. **Codigo lazy sin su check esta incompleto:** logica no-trivial (rama/bucle/parser/ruta de dinero o seguridad) deja UN check ejecutable (assert-based self-check o un test pequeño); one-liners triviales no necesitan test (YAGNI tambien aplica a los tests).
+
+(Compone con caveman = prosa terse; ponytail = qué construyes. Compone con los gates: el verifier sigue cazando stubs — lazy ≠ incompleto.)
