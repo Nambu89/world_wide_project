@@ -16,8 +16,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, _resetDbForTesting } from '@www/store';
-import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, _resetDbForTesting } from '@www/store';
+import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow, ConvergenceSignalRow } from '@www/store';
 import { createApp } from './server.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -229,6 +229,42 @@ describe('server.ts integration', () => {
       },
     ];
     await insertCiiSnapshots(seedCii);
+
+    // Seed convergence signals for T-33 tests
+    // Japan has a centroid → lat/lon non-null; ZZZ-NoMap does not → null
+    const now4 = Date.now();
+    const seedConvergence: ConvergenceSignalRow[] = [
+      {
+        country: 'Japan',
+        familiesJson: '["events","signals"]',
+        dimensionsJson: '["conflict","economic"]',
+        componentsJson: JSON.stringify([
+          { country: 'Japan', dimension: 'conflict', dataFamily: 'events', magnitude: 0.7, ts: now4 - 3600_000, signalPresent: true, source: 'usgs' },
+          { country: 'Japan', dimension: 'economic', dataFamily: 'signals', magnitude: 0.4, ts: now4 - 3600_000, signalPresent: true, source: 'gkg' },
+        ]),
+        strength: 0.72,
+        sourceCount: 2,
+        dynamicScore: 0.05,
+        methodologyVersion: '1.0.0',
+        firstDetectedAt: now4 - 7200_000,
+        capturedAt: now4 - 1000,
+      },
+      {
+        country: 'ZZZ-NoMap',
+        familiesJson: '["events","signals"]',
+        dimensionsJson: '["conflict"]',
+        componentsJson: JSON.stringify([
+          { country: 'ZZZ-NoMap', dimension: 'conflict', dataFamily: 'events', magnitude: 0.6, ts: now4 - 3600_000, signalPresent: true, source: 'gdelt' },
+        ]),
+        strength: 0.60,
+        sourceCount: 2,
+        dynamicScore: null,
+        methodologyVersion: '1.0.0',
+        firstDetectedAt: now4 - 7200_000,
+        capturedAt: now4 - 2000,
+      },
+    ];
+    await insertConvergenceSignals(seedConvergence);
 
     // Start server on ephemeral port (no scheduler)
     server = createApp({ startScheduler: false });
@@ -719,6 +755,101 @@ describe('server.ts integration', () => {
   });
 
   it('GET /api/events still 200 after T-25 routes added', async () => {
+    const { status } = await get(server, '/api/events');
+    assert.equal(status, 200);
+  });
+
+  // ── /api/convergence (T-33) ───────────────────────────────────────────────
+
+  it('GET /api/convergence → 200 with seeded signals + lat/lon adjunto', async () => {
+    const { status, body } = await get(server, '/api/convergence');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{
+      country: string;
+      strength: number;
+      lat: number | null;
+      lon: number | null;
+    }>;
+    assert.ok(Array.isArray(rows), 'should be an array');
+    assert.ok(rows.length >= 2, 'should return at least 2 seeded signals');
+    // camelCase wire (L-1): spot-check key fields
+    const first = rows[0]!;
+    assert.ok('country' in first, 'should have country (camelCase)');
+    assert.ok('strength' in first, 'should have strength (camelCase)');
+    assert.ok('familiesJson' in first, 'should have familiesJson (camelCase)');
+    assert.ok('componentsJson' in first, 'should have componentsJson (camelCase)');
+    assert.ok('lat' in first, 'should have lat field');
+    assert.ok('lon' in first, 'should have lon field');
+  });
+
+  it('GET /api/convergence → Japan row has non-null lat/lon (known centroid)', async () => {
+    const { status, body } = await get(server, '/api/convergence');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; lat: number | null; lon: number | null }>;
+    const japan = rows.find((r) => r.country === 'Japan');
+    assert.ok(japan !== undefined, 'Japan should be present');
+    assert.ok(japan.lat !== null, 'Japan lat should not be null');
+    assert.ok(japan.lon !== null, 'Japan lon should not be null');
+    assert.ok(typeof japan.lat === 'number', 'Japan lat should be a number');
+    assert.ok(typeof japan.lon === 'number', 'Japan lon should be a number');
+  });
+
+  it('GET /api/convergence → ZZZ-NoMap row has lat/lon null (no centroid)', async () => {
+    const { status, body } = await get(server, '/api/convergence');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; lat: number | null; lon: number | null }>;
+    const noMap = rows.find((r) => r.country === 'ZZZ-NoMap');
+    assert.ok(noMap !== undefined, 'ZZZ-NoMap should be present');
+    assert.equal(noMap.lat, null, 'unknown country lat should be null');
+    assert.equal(noMap.lon, null, 'unknown country lon should be null');
+  });
+
+  it('GET /api/convergence → solo-lectura (no motor invocado; store-only)', async () => {
+    // Structural: the route calls only getLatestConvergence() (store).
+    // If the motor (detectAllConvergence) were called, it would error because
+    // @www/core-signals is not wired in tests.
+    // The fact that the route returns 200 with the exact seeded data proves it reads
+    // from the DB only — no motor side-effects.
+    const { status, body } = await get(server, '/api/convergence');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; strength: number }>;
+    const japan = rows.find((r) => r.country === 'Japan');
+    assert.ok(japan !== undefined, 'Japan should be present (seeded directly, no motor needed)');
+    assert.ok(Math.abs(japan.strength - 0.72) < 0.001, 'strength should match seeded value exactly');
+  });
+
+  it('GET /api/convergence → familiesJson/componentsJson devueltos como JSON string (cliente parsea)', async () => {
+    const { status, body } = await get(server, '/api/convergence');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; familiesJson: unknown; componentsJson: unknown }>;
+    const japan = rows.find((r) => r.country === 'Japan');
+    assert.ok(japan !== undefined, 'Japan should be present');
+    // familiesJson and componentsJson must be raw JSON strings (not pre-parsed objects)
+    assert.equal(typeof japan.familiesJson, 'string', 'familiesJson should be a string');
+    assert.equal(typeof japan.componentsJson, 'string', 'componentsJson should be a string');
+    // and they must be valid JSON
+    assert.doesNotThrow(() => JSON.parse(japan.familiesJson as string), 'familiesJson must be valid JSON');
+    assert.doesNotThrow(() => JSON.parse(japan.componentsJson as string), 'componentsJson must be valid JSON');
+  });
+
+  // ── Regression guard: previous endpoints still green after T-33 ──────────
+
+  it('GET /api/health still 200 after T-33 routes added', async () => {
+    const { status } = await get(server, '/api/health');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/cii still 200 after T-33 routes added', async () => {
+    const { status } = await get(server, '/api/cii');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/signals still 200 after T-33 routes added', async () => {
+    const { status } = await get(server, '/api/signals');
+    assert.equal(status, 200);
+  });
+
+  it('GET /api/events still 200 after T-33 routes added', async () => {
     const { status } = await get(server, '/api/events');
     assert.equal(status, 200);
   });

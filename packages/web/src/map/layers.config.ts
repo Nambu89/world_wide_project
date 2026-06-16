@@ -483,12 +483,95 @@ export const CII_LAYERS: LayerSpec[] = [
   },
 ];
 
-/** All unique source ids needed by LAYERS + SIGNAL_LAYERS + CII_LAYERS */
-export const LAYER_SOURCES = [
-  ...new Set([...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS].map((l) => l.source)),
+// ---------------------------------------------------------------------------
+// CONVERGENCE_LAYERS — convergence signal rings per country (T-34)
+//
+// Design: D-402/D-404 — ANILLO (ring glyph):
+//   circle-color = transparent (rgba(0,0,0,0)) → hollow centre.
+//   circle-stroke = thick amber→red ramp by strength (DISTINCT from CII fill ramp).
+//   circle-radius = LARGER than CII circle so rings coexist without occlusion (R-5).
+//   circle-stroke-opacity driven by strength.
+//
+// Source: 'convergence-countries' (GeoJSON; 1 Feature per signal with lat/lon).
+// Toggle: 'convergence' — INDEPENDENT from 'cii'; OFF by default (D-403/OQ-3).
+// Properties on features (W-3 scalar): country, strength, sourceCount, families, topDimension.
+// ---------------------------------------------------------------------------
+
+/** Stroke-color ramp: amber → orange-red → red by strength (0..1) — distinct from CII fill */
+const CONVERGENCE_STROKE_COLOR = [
+  'interpolate',
+  ['linear'],
+  ['get', 'strength'],
+  0,   '#f59e0b',  // {colors.warning} amber — weak signal
+  0.4, '#f97316',  // orange — moderate
+  0.7, '#ef4444',  // {colors.danger} red — strong
+  1,   '#7f1d1d',  // deep red — critical convergence
 ];
 
-/** All unique toggle keys (events + signals + cii) */
+/** Stroke-width ramp by strength (0..1) → 1.5..5px (thick ring) */
+const CONVERGENCE_STROKE_WIDTH = [
+  'interpolate',
+  ['linear'],
+  ['get', 'strength'],
+  0,   1.5,
+  1,   5,
+];
+
+/** Stroke-opacity ramp by strength (0..1) → 0.4..0.95 */
+const CONVERGENCE_STROKE_OPACITY = [
+  'interpolate',
+  ['linear'],
+  ['get', 'strength'],
+  0,   0.4,
+  1,   0.95,
+];
+
+/**
+ * Circle radius ramp by strength (0..1) → larger than CII circles (R-5).
+ * At zoom 2: 10..20; at zoom 8: 20..34. CII goes up to 18px max at zoom 8.
+ */
+const CONVERGENCE_RADIUS = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  2, ['interpolate', ['linear'], ['get', 'strength'], 0, 10, 1, 20],
+  8, ['interpolate', ['linear'], ['get', 'strength'], 0, 20, 1, 34],
+];
+
+export const CONVERGENCE_LAYERS: LayerSpec[] = [
+  // =====================================================================
+  // CONVERGENCE per-country — ring at country centroid, amber→red by strength
+  // D-402/D-404: hollow circle (transparent fill) + thick stroke = anillo
+  // D-403/OQ-3: toggle 'convergence' OFF by default
+  // Attribution: motor de convergencia propio · datos: USGS/NASA EONET/GDELT/GKG
+  // =====================================================================
+  {
+    id: 'convergence-countries',
+    source: 'convergence-countries',
+    type: 'circle',
+    label: 'Convergence Signals',
+    toggleKey: 'convergence',
+    visibleWhen: (active) => active.has('convergence'),
+    paint: {
+      'circle-color': 'rgba(0,0,0,0)',          // D-404: transparent fill → ring shape
+      'circle-radius': CONVERGENCE_RADIUS,       // R-5: larger than CII circles
+      'circle-stroke-width': CONVERGENCE_STROKE_WIDTH,
+      'circle-stroke-color': CONVERGENCE_STROKE_COLOR,
+      'circle-stroke-opacity': CONVERGENCE_STROKE_OPACITY,
+    },
+  },
+];
+
+/** All unique source ids needed by LAYERS + SIGNAL_LAYERS + CII_LAYERS + CONVERGENCE_LAYERS */
+export const LAYER_SOURCES = [
+  ...new Set(
+    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS].map((l) => l.source)
+  ),
+];
+
+/** All unique toggle keys (events + signals + cii + convergence) */
 export const TOGGLE_KEYS = [
-  ...new Set([...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS].map((l) => l.toggleKey)),
+  ...new Set(
+    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS].map((l) => l.toggleKey)
+  ),
 ];

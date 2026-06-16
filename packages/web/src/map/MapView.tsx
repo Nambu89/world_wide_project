@@ -14,19 +14,24 @@
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
-import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, LAYER_SOURCES } from './layers.config';
+import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, CONVERGENCE_LAYERS, LAYER_SOURCES } from './layers.config';
 import {
   getEvents,
   getSignals,
   getCii,
+  getConvergence,
   type GlobalEvent,
   type RadarSignal,
   type CiiCountry,
+  type ConvergenceCountry,
 } from '../api/client';
 
 interface Props {
   activeLayers: Set<string>;
-  /** Country selected in RiskPanel — map centers on it when set (declarative tie). */
+  /**
+   * Country selected in RiskPanel or ConvergencePanel — map centers on it when set.
+   * Declarative tie: React state drives flyTo, no imperative map calls.
+   */
   activeCountry?: string | null;
 }
 
@@ -119,6 +124,36 @@ function ciiToGeoJSON(countries: CiiCountry[]): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features };
 }
 
+/**
+ * Convert ConvergenceCountry array to GeoJSON for the 'convergence-countries' source (T-34).
+ *
+ * D-402: 1 Feature per signal WITH lat/lon (signals without coords are discarded).
+ * W-3: properties are SCALAR — MapLibre ['get'] cannot index arrays.
+ *   families → joined string (e.g. "events+signals")
+ *   topDimension → scalar string or ''
+ */
+function convergenceToGeoJSON(signals: ConvergenceCountry[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const s of signals) {
+    if (s.lat == null || s.lon == null) continue; // no centroid — panel only (R-1)
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [s.lon, s.lat],
+      },
+      properties: {
+        country: s.country,
+        strength: s.strength,
+        sourceCount: s.sourceCount,
+        families: s.families.join('+'),   // W-3: scalar string not array
+        topDimension: s.topDimension ?? '',
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
 /** Empty GeoJSON for initial source registration */
 const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
   type: 'FeatureCollection',
@@ -135,8 +170,13 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const mapReadyRef = useRef(false);
-  /** Store latest CII data so we can center map when activeCountry changes */
+  /** Store latest CII data so we can center map when activeCountry changes (RiskPanel) */
   const ciiDataRef = useRef<CiiCountry[]>([]);
+  /**
+   * Store latest convergence data for map-tie (R-2 / D-406).
+   * flyTo uses the lat/lon already in the signal (does NOT fall through to ciiDataRef).
+   */
+  const convergenceDataRef = useRef<ConvergenceCountry[]>([]);
 
   // Initialize map once
   useEffect(() => {
@@ -188,8 +228,8 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
         }
       }
 
-      // Add all layers by iterating LAYERS + SIGNAL_LAYERS + CII_LAYERS — NEVER add layers outside this loop
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS]) {
+      // Add all layers by iterating LAYERS + SIGNAL_LAYERS + CII_LAYERS + CONVERGENCE_LAYERS — NEVER add layers outside this loop
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS]) {
         if (map.getLayer(spec.id)) continue;
 
         // Build a plain object and cast to LayerSpecification at the call site.
@@ -234,7 +274,7 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
 
     const apply = () => {
       if (!mapReadyRef.current) return;
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS]) {
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS]) {
         if (!map.getLayer(spec.id)) continue;
         const visible = spec.visibleWhen(activeLayers);
         map.setLayoutProperty(spec.id, 'visibility', visible ? 'visible' : 'none');
@@ -370,13 +410,69 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
     };
   }, []);
 
-  // Map-tie: when activeCountry changes (from RiskPanel selection), fly to that country.
-  // Uses ciiDataRef to find the centroid — purely declarative React state, no imperative add.
+  // Load convergence signals from /api/convergence and inject into 'convergence-countries' source (T-34).
+  // One useEffect per data type — mirrors the CII pattern.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const signals = await getConvergence();
+        if (cancelled) return;
+
+        convergenceDataRef.current = signals;
+
+        const injectData = () => {
+          if (!map || !mapReadyRef.current) return;
+          const source = map.getSource('convergence-countries') as GeoJSONSource | undefined;
+          if (source) {
+            source.setData(convergenceToGeoJSON(signals));
+          }
+        };
+
+        if (mapReadyRef.current) {
+          injectData();
+        } else {
+          map.once('load', injectData);
+        }
+      } catch {
+        // Graceful: upstream failure leaves source as empty GeoJSON (no crash).
+        // ConvergencePanel shows its own error state independently via its own fetch.
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Map-tie: when activeCountry changes (from RiskPanel or ConvergencePanel selection),
+  // fly to that country. Searches convergenceDataRef FIRST (uses embedded lat/lon — R-2/D-406),
+  // then falls through to ciiDataRef. Purely declarative React state, no imperative add.
   useEffect(() => {
     if (!activeCountry) return;
     const map = mapRef.current;
     if (!map || !mapReadyRef.current) return;
 
+    // R-2: convergenceDataRef has the lat/lon embedded in the signal — preferred for convergence flyTo
+    const convergenceSig = convergenceDataRef.current.find(
+      (s) => s.country === activeCountry && s.lat != null && s.lon != null
+    );
+    if (convergenceSig && convergenceSig.lat != null && convergenceSig.lon != null) {
+      map.flyTo({
+        center: [convergenceSig.lon, convergenceSig.lat],
+        zoom: 4,
+        duration: 800,
+      });
+      return;
+    }
+
+    // Fallback: look up centroid from CII data (covers RiskPanel selections)
     const country = ciiDataRef.current.find(
       (c) => c.country === activeCountry && c.lat != null && c.lon != null
     );

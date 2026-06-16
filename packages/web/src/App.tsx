@@ -9,9 +9,13 @@
  * T-13: EventsPanel mounted alongside FinancePanel.
  * T-20: RadarPanel (3rd tab) + activeSection state for map-tie.
  * T-26: RiskPanel (4th tab 'Risk') + activeCountry state for map-tie.
- *   - Panel tabs: Finance | Events | Radar | Risk
+ *   - Panel tabs: Finance | Events | Radar | Risk | Convergence
  *   - activeLayers includes 'cii' toggle key (default ON).
- *   - Selecting a country in RiskPanel sets activeCountry → MapView flies to centroid.
+ *   - 'convergence' toggle key is OFF by default (D-403/OQ-3).
+ *   - Selecting a country in RiskPanel or ConvergencePanel sets activeCountry → MapView flies to centroid.
+ * T-34: ConvergencePanel (5th tab 'Convergence') — rebanada 5.
+ *   - toggle 'convergence' OFF by default; capa entra apagada (D-403).
+ *   - Reuses handleCountrySelect + activeCountry from RiskPanel (D-406/R-2).
  */
 
 import { useState } from 'react';
@@ -23,6 +27,7 @@ import RadarPanel, {
   type RadarSectionKey,
 } from './panels/RadarPanel';
 import RiskPanel from './panels/RiskPanel';
+import ConvergencePanel from './panels/ConvergencePanel';
 import { LAYERS, TOGGLE_KEYS } from './map/layers.config';
 
 // ---------------------------------------------------------------------------
@@ -33,16 +38,22 @@ import { LAYERS, TOGGLE_KEYS } from './map/layers.config';
  * Build the initial activeLayers Set.
  * Includes all map layer toggle keys + event type keys + signal section keys.
  * All start enabled so the map is populated on first load.
+ *
+ * Exception: 'convergence' toggle is OFF by default (D-403/OQ-3).
+ * The convergence layer (ring/halo) is independent from CII and starts hidden.
  */
 function buildInitialActive(): Set<string> {
-  return new Set([...TOGGLE_KEYS, ...EVENTS_TOGGLE_KEYS, ...SIGNAL_TOGGLE_KEYS]);
+  const initial = new Set([...TOGGLE_KEYS, ...EVENTS_TOGGLE_KEYS, ...SIGNAL_TOGGLE_KEYS]);
+  // D-403: convergence layer starts OFF — user must enable it explicitly.
+  initial.delete('convergence');
+  return initial;
 }
 
 // ---------------------------------------------------------------------------
 // Panel tab types
 // ---------------------------------------------------------------------------
 
-type PanelTab = 'finance' | 'events' | 'radar' | 'risk';
+type PanelTab = 'finance' | 'events' | 'radar' | 'risk' | 'convergence';
 
 // ---------------------------------------------------------------------------
 // App
@@ -126,7 +137,8 @@ export default function App() {
     activeTab === 'finance' ? 'Finance'
     : activeTab === 'events' ? 'Events'
     : activeTab === 'radar' ? 'Radar'
-    : 'Risk';
+    : activeTab === 'risk' ? 'Risk'
+    : 'Convergence';
 
   return (
     <div className="app-layout">
@@ -213,6 +225,16 @@ export default function App() {
           >
             Risk
           </button>
+          <button
+            role="tab"
+            type="button"
+            className={`panel-tab${activeTab === 'convergence' ? ' active' : ''}`}
+            aria-selected={activeTab === 'convergence'}
+            aria-controls="panel-content"
+            onClick={() => setActiveTab('convergence')}
+          >
+            Convergence
+          </button>
         </div>
 
         {/* Panel content */}
@@ -237,6 +259,12 @@ export default function App() {
           )}
           {activeTab === 'risk' && (
             <RiskPanel
+              activeCountry={activeCountry}
+              onCountrySelect={handleCountrySelect}
+            />
+          )}
+          {activeTab === 'convergence' && (
+            <ConvergencePanel
               activeCountry={activeCountry}
               onCountrySelect={handleCountrySelect}
             />

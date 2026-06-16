@@ -21,6 +21,7 @@
  *   GET /api/signals              (T-19 — list with filters)
  *   GET /api/cii/:country         (T-25 — country CII trend; more specific, checked first)
  *   GET /api/cii                  (T-25 — latest CII snapshot per country + centroids)
+ *   GET /api/convergence          (T-33 — latest convergence signal per country + centroids)
  */
 
 import * as http from 'node:http';
@@ -38,8 +39,9 @@ import {
   getSignalTrend,
   getLatestCii,
   getCiiTrend,
+  getLatestConvergence,
 } from '@www/store';
-import type { EventFilter, Section, CiiSnapshotRow } from '@www/store';
+import type { EventFilter, Section, CiiSnapshotRow, ConvergenceSignalRow } from '@www/store';
 import { COUNTRY_CENTROIDS } from './packages/connectors/geo/country-centroids.js';
 import { createScheduler, defaultJobs } from '@www/scheduler';
 
@@ -432,6 +434,25 @@ async function route(
   if (pathname === '/api/cii') {
     const rows = await getLatestCii();
     const payload = rows.map((row: CiiSnapshotRow) => {
+      const centroid = COUNTRY_CENTROIDS[row.country];
+      return {
+        ...row,
+        lat: centroid !== undefined ? centroid.lat : null,
+        lon: centroid !== undefined ? centroid.lon : null,
+      };
+    });
+    sendJson(res, 200, payload);
+    return;
+  }
+
+  // ── /api/convergence ──────────────────────────────────────────────────────
+  // T-33 — SOLO-LECTURA. Returns latest convergence signal per country with
+  // lat/lon from COUNTRY_CENTROIDS lookup. Countries without a centroid get
+  // lat/lon null (shown in panel only, not on map).
+  // NEVER fires the convergence engine on-request (D-400/D-401/ADR-004).
+  if (pathname === '/api/convergence') {
+    const rows = await getLatestConvergence();
+    const payload = rows.map((row: ConvergenceSignalRow) => {
       const centroid = COUNTRY_CENTROIDS[row.country];
       return {
         ...row,

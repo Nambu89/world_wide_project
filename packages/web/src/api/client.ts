@@ -13,6 +13,7 @@
  *   /api/signals/trend → SignalTrendPoint[] (T-20, bare array)
  *   /api/cii          → CiiRow[]           (T-26, bare array, camelCase — L-1 critical)
  *   /api/cii/:country → CiiRow[]           (T-26, trend array for a country)
+ *   /api/convergence  → ConvergenceRow[]   (T-34, bare array, camelCase — L-1 critical)
  */
 
 // ---------------------------------------------------------------------------
@@ -124,6 +125,41 @@ interface RawCiiRow {
   capturedAt: number;           // epoch ms
   lat: number | null;
   lon: number | null;
+}
+
+/**
+ * Raw convergence signal row from /api/convergence.
+ * WIRE FORMAT = camelCase (L-1 critical — anti-BUG-1, same discipline as EventRow/CiiRow).
+ * familiesJson/dimensionsJson/componentsJson are JSON strings; the client parses them.
+ * lat/lon may be null for countries without a centroid.
+ */
+interface RawConvergenceRow {
+  country: string;
+  familiesJson: string;       // JSON string of string[]
+  dimensionsJson: string;     // JSON string of string[]
+  componentsJson: string;     // JSON string of ConvergenceObservation[]
+  strength: number;
+  sourceCount: number;
+  dynamicScore: number | null;
+  methodologyVersion: string;
+  firstDetectedAt: number;    // epoch ms
+  capturedAt: number;         // epoch ms
+  lat: number | null;
+  lon: number | null;
+}
+
+/**
+ * Shape of a single observation in componentsJson (from @www/core-signals observe.ts).
+ * Used locally to extract topDimension (GAP-1).
+ */
+interface ConvergenceObservation {
+  country: string;
+  dimension: string;
+  dataFamily: string;
+  magnitude: number;
+  ts: number;
+  signalPresent: boolean;
+  source: string;
 }
 
 /**
@@ -301,6 +337,30 @@ export interface CiiCountry {
   capturedAt: string;   // ISO string
 }
 
+/**
+ * View-model for a convergence signal consumed by ConvergencePanel + MapView (T-34).
+ * topDimension = the dimension from componentsJson with the highest magnitude (GAP-1).
+ * trend = sign of dynamicScore (>0 rising, <0 falling, else stable or null if no dynamicScore).
+ * lat/lon null → panel only (no map feature emitted).
+ */
+export interface ConvergenceCountry {
+  country: string;
+  families: string[];
+  dimensions: string[];
+  /** Dimension with the highest magnitude in componentsJson (GAP-1); null if empty */
+  topDimension: string | null;
+  strength: number;
+  sourceCount: number;
+  dynamicScore: number | null;
+  /** Trend derived from dynamicScore sign */
+  trend: 'rising' | 'falling' | 'stable' | null;
+  methodologyVersion: string;
+  firstDetectedAt: string;   // ISO string
+  capturedAt: string;        // ISO string
+  lat: number | null;
+  lon: number | null;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter helpers
 // ---------------------------------------------------------------------------
@@ -420,6 +480,74 @@ function adaptCiiRow(r: RawCiiRow): CiiCountry {
     lat: r.lat,
     lon: r.lon,
     capturedAt: new Date(r.capturedAt).toISOString(),
+  };
+}
+
+/** Derive trend from dynamicScore sign. */
+function trendFromDynamicScore(
+  dynamicScore: number | null
+): 'rising' | 'falling' | 'stable' | null {
+  if (dynamicScore == null) return null;
+  if (dynamicScore > 0) return 'rising';
+  if (dynamicScore < 0) return 'falling';
+  return 'stable';
+}
+
+/**
+ * Extract the topDimension from componentsJson (GAP-1).
+ * componentsJson = JSON of ConvergenceObservation[].
+ * topDimension = dimension of the obs with highest magnitude; fallback to dimensions[0]; null if empty.
+ */
+function topDimensionFromComponents(
+  componentsJson: string,
+  dimensions: string[]
+): string | null {
+  try {
+    const parsed: unknown = JSON.parse(componentsJson);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return dimensions[0] ?? null;
+    }
+    const obs = parsed as ConvergenceObservation[];
+    const best = obs.reduce((a, b) => (b.magnitude > a.magnitude ? b : a));
+    return best.dimension ?? dimensions[0] ?? null;
+  } catch {
+    return dimensions[0] ?? null;
+  }
+}
+
+function adaptConvergenceRow(r: RawConvergenceRow): ConvergenceCountry {
+  let families: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(r.familiesJson);
+    if (Array.isArray(parsed)) families = parsed as string[];
+  } catch {
+    // D-409: parse failure → empty array
+  }
+
+  let dimensions: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(r.dimensionsJson);
+    if (Array.isArray(parsed)) dimensions = parsed as string[];
+  } catch {
+    // D-409: parse failure → empty array
+  }
+
+  const topDimension = topDimensionFromComponents(r.componentsJson, dimensions);
+
+  return {
+    country: r.country,
+    families,
+    dimensions,
+    topDimension,
+    strength: r.strength,
+    sourceCount: r.sourceCount,
+    dynamicScore: r.dynamicScore,
+    trend: trendFromDynamicScore(r.dynamicScore),
+    methodologyVersion: r.methodologyVersion,
+    firstDetectedAt: new Date(r.firstDetectedAt).toISOString(),
+    capturedAt: new Date(r.capturedAt).toISOString(),
+    lat: r.lat,
+    lon: r.lon,
   };
 }
 
@@ -594,4 +722,21 @@ export async function getCiiTrend(country: string, since?: number): Promise<CiiC
   const raw = await apiFetch<RawCiiRow[]>(path);
   if (!Array.isArray(raw)) return [];
   return raw.map(adaptCiiRow);
+}
+
+/**
+ * Fetch convergence signals for all countries from /api/convergence (T-34).
+ *
+ * All rows are returned (no lat/lon filtering — panel uses all).
+ * Rows without lat/lon are included; MapView discards them when building GeoJSON features.
+ *
+ * Wire format: camelCase (L-1 critical — anti-BUG-1).
+ * familiesJson/dimensionsJson/componentsJson are parsed defensively (D-409).
+ *
+ * Attribution: motor de convergencia propio · datos: USGS/NASA EONET/GDELT/GKG
+ */
+export async function getConvergence(): Promise<ConvergenceCountry[]> {
+  const raw = await apiFetch<RawConvergenceRow[]>('/api/convergence');
+  if (!Array.isArray(raw)) return [];
+  return raw.map(adaptConvergenceRow);
 }

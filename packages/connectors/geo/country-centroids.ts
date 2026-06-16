@@ -48,6 +48,7 @@ export const COUNTRY_CENTROIDS: Record<string, { lat: number; lon: number }> = {
   Turkey: { lat: 38.9, lon: 35.2 },
 
   // Oriente Medio
+  "Palestinian Territories": { lat: 31.9, lon: 35.2 },
   "Saudi Arabia": { lat: 23.9, lon: 45.1 },
   "United Arab Emirates": { lat: 23.4, lon: 53.8 },
   Israel: { lat: 31.0, lon: 34.9 },
