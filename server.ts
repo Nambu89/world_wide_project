@@ -40,8 +40,9 @@ import {
   getLatestCii,
   getCiiTrend,
   getLatestConvergence,
+  getLatestSanctions,
 } from '@www/store';
-import type { EventFilter, Section, CiiSnapshotRow, ConvergenceSignalRow } from '@www/store';
+import type { EventFilter, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '@www/store';
 import { COUNTRY_CENTROIDS } from './packages/connectors/geo/country-centroids.js';
 import { createScheduler, defaultJobs } from '@www/scheduler';
 
@@ -453,6 +454,24 @@ async function route(
   if (pathname === '/api/convergence') {
     const rows = await getLatestConvergence();
     const payload = rows.map((row: ConvergenceSignalRow) => {
+      const centroid = COUNTRY_CENTROIDS[row.country];
+      return {
+        ...row,
+        lat: centroid !== undefined ? centroid.lat : null,
+        lon: centroid !== undefined ? centroid.lon : null,
+      };
+    });
+    sendJson(res, 200, payload);
+    return;
+  }
+
+  // ── /api/sanctions ──────────────────────────────────────────────────────
+  // SOLO-LECTURA. Returns latest OFAC sanctions count per country with lat/lon
+  // from COUNTRY_CENTROIDS lookup. Countries without a centroid get lat/lon null
+  // (shown in panel only, not on map). NEVER fires the connector on-request (ADR-004).
+  if (pathname === '/api/sanctions') {
+    const rows = await getLatestSanctions();
+    const payload = rows.map((row: SanctionRow) => {
       const centroid = COUNTRY_CENTROIDS[row.country];
       return {
         ...row,

@@ -149,6 +149,19 @@ interface RawConvergenceRow {
 }
 
 /**
+ * Raw sanctions row from /api/sanctions.
+ * WIRE FORMAT = camelCase (D-505 / L-1 — anti-BUG-1, same discipline as CiiRow).
+ * lat/lon null for countries without a centroid.
+ */
+interface RawSanctionRow {
+  country: string;
+  sanctionedCount: number;
+  capturedAt: number;   // epoch ms
+  lat: number | null;
+  lon: number | null;
+}
+
+/**
  * Shape of a single observation in componentsJson (from @www/core-signals observe.ts).
  * Used locally to extract topDimension (GAP-1).
  */
@@ -361,6 +374,18 @@ export interface ConvergenceCountry {
   lon: number | null;
 }
 
+/**
+ * View-model for an OFAC sanctions row consumed by FinancePanel + MapView.
+ * lat/lon null → panel only (no map feature emitted).
+ */
+export interface SanctionCountry {
+  country: string;
+  sanctionedCount: number;
+  capturedAt: string;   // ISO string
+  lat: number | null;
+  lon: number | null;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter helpers
 // ---------------------------------------------------------------------------
@@ -545,6 +570,16 @@ function adaptConvergenceRow(r: RawConvergenceRow): ConvergenceCountry {
     trend: trendFromDynamicScore(r.dynamicScore),
     methodologyVersion: r.methodologyVersion,
     firstDetectedAt: new Date(r.firstDetectedAt).toISOString(),
+    capturedAt: new Date(r.capturedAt).toISOString(),
+    lat: r.lat,
+    lon: r.lon,
+  };
+}
+
+function adaptSanctionRow(r: RawSanctionRow): SanctionCountry {
+  return {
+    country: r.country,
+    sanctionedCount: r.sanctionedCount,
     capturedAt: new Date(r.capturedAt).toISOString(),
     lat: r.lat,
     lon: r.lon,
@@ -739,4 +774,17 @@ export async function getConvergence(): Promise<ConvergenceCountry[]> {
   const raw = await apiFetch<RawConvergenceRow[]>('/api/convergence');
   if (!Array.isArray(raw)) return [];
   return raw.map(adaptConvergenceRow);
+}
+
+/**
+ * Fetch latest OFAC sanctions count per country from /api/sanctions.
+ * All rows returned (no lat/lon filter — panel uses all); MapView discards no-coord rows.
+ * Wire format: camelCase (D-505 / L-1).
+ *
+ * Attribution: OpenSanctions (us_ofac_sdn, CC BY-NC) · OFAC SDN list
+ */
+export async function getSanctions(): Promise<SanctionCountry[]> {
+  const raw = await apiFetch<RawSanctionRow[]>('/api/sanctions');
+  if (!Array.isArray(raw)) return [];
+  return raw.map(adaptSanctionRow);
 }

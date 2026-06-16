@@ -562,16 +562,66 @@ export const CONVERGENCE_LAYERS: LayerSpec[] = [
   },
 ];
 
-/** All unique source ids needed by LAYERS + SIGNAL_LAYERS + CII_LAYERS + CONVERGENCE_LAYERS */
+// ---------------------------------------------------------------------------
+// SANCTIONS_LAYERS — OFAC sanctions per-country (filled violet circle)
+//
+// Source: 'sanctions-countries' (GeoJSON; 1 Feature per country with centroid).
+// Glyph DISTINCT from CII (green→red fill) and convergence (amber→red ring):
+//   filled violet circle, color + radius by `step` on raw sanctionedCount (D-502).
+// Toggle 'sanctions' OFF by default (D-503) — user opts in to avoid 3-way clutter.
+// Property on features (W-3 scalar): country, count.
+// ---------------------------------------------------------------------------
+
+/** Step expression: sanctionedCount → violet shade by magnitude (D-502) */
+const SANCTIONS_COLOR_STEP = [
+  'step',
+  ['get', 'count'],
+  '#c4b5fd',        // 1-9:     light violet
+  10,  '#a78bfa',   // 10-49:   violet
+  50,  '#8b5cf6',   // 50-199:  medium violet
+  200, '#7c3aed',   // 200-999: strong violet
+  1000, '#5b21b6',  // 1000+:   deep violet (Russia/Iran tier)
+];
+
+/** Step expression: sanctionedCount → radius px by magnitude */
+const SANCTIONS_RADIUS_STEP = [
+  'step',
+  ['get', 'count'],
+  5,
+  10,  7,
+  50,  9,
+  200, 12,
+  1000, 16,
+];
+
+export const SANCTIONS_LAYERS: LayerSpec[] = [
+  {
+    id: 'sanctions-countries',
+    source: 'sanctions-countries',
+    type: 'circle',
+    label: 'OFAC Sanctions',
+    toggleKey: 'sanctions',
+    visibleWhen: (active) => active.has('sanctions'),
+    paint: {
+      'circle-color': SANCTIONS_COLOR_STEP,
+      'circle-radius': SANCTIONS_RADIUS_STEP,
+      'circle-opacity': 0.80,
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': 'rgba(255,255,255,0.20)',
+    },
+  },
+];
+
+/** All unique source ids needed by all layer arrays */
 export const LAYER_SOURCES = [
   ...new Set(
-    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS].map((l) => l.source)
+    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS].map((l) => l.source)
   ),
 ];
 
-/** All unique toggle keys (events + signals + cii + convergence) */
+/** All unique toggle keys (events + signals + cii + convergence + sanctions) */
 export const TOGGLE_KEYS = [
   ...new Set(
-    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS].map((l) => l.toggleKey)
+    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS].map((l) => l.toggleKey)
   ),
 ];

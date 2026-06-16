@@ -16,8 +16,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, _resetDbForTesting } from '@www/store';
-import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow, ConvergenceSignalRow } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, insertSanctions, _resetDbForTesting } from '@www/store';
+import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '@www/store';
 import { createApp } from './server.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -265,6 +265,18 @@ describe('server.ts integration', () => {
       },
     ];
     await insertConvergenceSignals(seedConvergence);
+
+    // Seed sanctions for /api/sanctions tests (D-501..D-505)
+    // Japan has a centroid → lat/lon non-null; ZZZ-NoMap does not → null.
+    // Japan seeded twice to prove "latest snapshot only".
+    const now5 = Date.now();
+    const seedSanctions: SanctionRow[] = [
+      { country: 'Japan',     sanctionedCount: 12,   capturedAt: now5 - 900_000 }, // older
+      { country: 'Japan',     sanctionedCount: 15,   capturedAt: now5 },           // latest → 15
+      { country: 'Russia',    sanctionedCount: 5597, capturedAt: now5 },
+      { country: 'ZZZ-NoMap', sanctionedCount: 3,    capturedAt: now5 },
+    ];
+    await insertSanctions(seedSanctions);
 
     // Start server on ephemeral port (no scheduler)
     server = createApp({ startScheduler: false });
@@ -830,6 +842,60 @@ describe('server.ts integration', () => {
     // and they must be valid JSON
     assert.doesNotThrow(() => JSON.parse(japan.familiesJson as string), 'familiesJson must be valid JSON');
     assert.doesNotThrow(() => JSON.parse(japan.componentsJson as string), 'componentsJson must be valid JSON');
+  });
+
+  // ── /api/sanctions (sanctions UI) ─────────────────────────────────────────
+
+  it('GET /api/sanctions → 200 with latest count per country + lat/lon adjunto', async () => {
+    const { status, body } = await get(server, '/api/sanctions');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{
+      country: string;
+      sanctionedCount: number;
+      capturedAt: number;
+      lat: number | null;
+      lon: number | null;
+    }>;
+    assert.ok(Array.isArray(rows), 'should be an array');
+    assert.ok(rows.length >= 3, 'at least Japan/Russia/ZZZ-NoMap');
+    const first = rows[0]!;
+    assert.ok('sanctionedCount' in first, 'camelCase sanctionedCount field');
+    assert.ok('lat' in first && 'lon' in first, 'lat/lon fields present');
+  });
+
+  it('GET /api/sanctions → Japan row has non-null lat/lon + latest count only', async () => {
+    const { status, body } = await get(server, '/api/sanctions');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; sanctionedCount: number; lat: number | null; lon: number | null }>;
+    const japanRows = rows.filter((r) => r.country === 'Japan');
+    assert.equal(japanRows.length, 1, 'only latest Japan row appears');
+    assert.equal(japanRows[0]!.sanctionedCount, 15, 'latest count = 15 (not 12)');
+    assert.ok(typeof japanRows[0]!.lat === 'number', 'Japan lat is a number');
+    assert.ok(typeof japanRows[0]!.lon === 'number', 'Japan lon is a number');
+  });
+
+  it('GET /api/sanctions → ZZZ-NoMap row has lat/lon null (no centroid)', async () => {
+    const { status, body } = await get(server, '/api/sanctions');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; lat: number | null; lon: number | null }>;
+    const noMap = rows.find((r) => r.country === 'ZZZ-NoMap');
+    assert.ok(noMap !== undefined, 'ZZZ-NoMap present');
+    assert.equal(noMap.lat, null, 'unknown country lat null');
+    assert.equal(noMap.lon, null, 'unknown country lon null');
+  });
+
+  it('GET /api/sanctions → solo-lectura (store-only, no conector)', async () => {
+    // Returns exactly the seeded data → proves it reads the DB, never fires the connector.
+    const { status, body } = await get(server, '/api/sanctions');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ country: string; sanctionedCount: number }>;
+    const russia = rows.find((r) => r.country === 'Russia');
+    assert.ok(russia !== undefined && russia.sanctionedCount === 5597, 'seeded Russia count exact');
+  });
+
+  it('GET /api/sanctions still 200 (regression sibling of cii/convergence)', async () => {
+    const { status } = await get(server, '/api/sanctions');
+    assert.equal(status, 200);
   });
 
   // ── Regression guard: previous endpoints still green after T-33 ──────────

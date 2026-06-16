@@ -14,16 +14,18 @@
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
-import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, CONVERGENCE_LAYERS, LAYER_SOURCES } from './layers.config';
+import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, CONVERGENCE_LAYERS, SANCTIONS_LAYERS, LAYER_SOURCES } from './layers.config';
 import {
   getEvents,
   getSignals,
   getCii,
   getConvergence,
+  getSanctions,
   type GlobalEvent,
   type RadarSignal,
   type CiiCountry,
   type ConvergenceCountry,
+  type SanctionCountry,
 } from '../api/client';
 
 interface Props {
@@ -154,6 +156,27 @@ function convergenceToGeoJSON(signals: ConvergenceCountry[]): GeoJSON.FeatureCol
   return { type: 'FeatureCollection', features };
 }
 
+/**
+ * Convert SanctionCountry array to GeoJSON for the 'sanctions-countries' source.
+ * Only countries WITH a centroid emit a feature (others are panel-only).
+ * Property `count` is scalar (W-3) — drives the step color/radius paint.
+ */
+function sanctionsToGeoJSON(rows: SanctionCountry[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const s of rows) {
+    if (s.lat == null || s.lon == null) continue; // no centroid — panel only
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+      properties: {
+        country: s.country,
+        count: s.sanctionedCount,
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
 /** Empty GeoJSON for initial source registration */
 const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
   type: 'FeatureCollection',
@@ -177,6 +200,8 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
    * flyTo uses the lat/lon already in the signal (does NOT fall through to ciiDataRef).
    */
   const convergenceDataRef = useRef<ConvergenceCountry[]>([]);
+  /** Store latest sanctions data for map-tie flyTo (uses embedded lat/lon). */
+  const sanctionsDataRef = useRef<SanctionCountry[]>([]);
 
   // Initialize map once
   useEffect(() => {
@@ -229,7 +254,7 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
       }
 
       // Add all layers by iterating LAYERS + SIGNAL_LAYERS + CII_LAYERS + CONVERGENCE_LAYERS — NEVER add layers outside this loop
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS]) {
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS]) {
         if (map.getLayer(spec.id)) continue;
 
         // Build a plain object and cast to LayerSpecification at the call site.
@@ -274,7 +299,7 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
 
     const apply = () => {
       if (!mapReadyRef.current) return;
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS]) {
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS]) {
         if (!map.getLayer(spec.id)) continue;
         const visible = spec.visibleWhen(activeLayers);
         map.setLayoutProperty(spec.id, 'visibility', visible ? 'visible' : 'none');
@@ -451,6 +476,47 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
     };
   }, []);
 
+  // Load sanctions from /api/sanctions and inject into 'sanctions-countries' source.
+  // One useEffect per data type — mirrors the convergence pattern.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const rows = await getSanctions();
+        if (cancelled) return;
+
+        sanctionsDataRef.current = rows;
+
+        const injectData = () => {
+          if (!map || !mapReadyRef.current) return;
+          const source = map.getSource('sanctions-countries') as GeoJSONSource | undefined;
+          if (source) {
+            source.setData(sanctionsToGeoJSON(rows));
+          }
+        };
+
+        if (mapReadyRef.current) {
+          injectData();
+        } else {
+          map.once('load', injectData);
+        }
+      } catch {
+        // Graceful: upstream failure leaves source as empty GeoJSON (no crash).
+        // FinancePanel shows its own error state independently.
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Map-tie: when activeCountry changes (from RiskPanel or ConvergencePanel selection),
   // fly to that country. Searches convergenceDataRef FIRST (uses embedded lat/lon — R-2/D-406),
   // then falls through to ciiDataRef. Purely declarative React state, no imperative add.
@@ -469,6 +535,15 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
         zoom: 4,
         duration: 800,
       });
+      return;
+    }
+
+    // Sanctions selections embed lat/lon — check before the CII fallback.
+    const sanctionRow = sanctionsDataRef.current.find(
+      (s) => s.country === activeCountry && s.lat != null && s.lon != null
+    );
+    if (sanctionRow && sanctionRow.lat != null && sanctionRow.lon != null) {
+      map.flyTo({ center: [sanctionRow.lon, sanctionRow.lat], zoom: 4, duration: 800 });
       return;
     }
 

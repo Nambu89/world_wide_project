@@ -46,6 +46,8 @@ function buildInitialActive(): Set<string> {
   const initial = new Set([...TOGGLE_KEYS, ...EVENTS_TOGGLE_KEYS, ...SIGNAL_TOGGLE_KEYS]);
   // D-403: convergence layer starts OFF — user must enable it explicitly.
   initial.delete('convergence');
+  // D-503: sanctions layer starts OFF — user opts in (avoids 3-way per-country clutter).
+  initial.delete('sanctions');
   return initial;
 }
 
@@ -117,6 +119,7 @@ export default function App() {
     setActiveLayers((prev) => {
       const next = new Set(prev);
       next.add('cii');
+      next.add('sanctions'); // ensure the sanctions glyph is visible when selecting from Finance
       return next;
     });
   };
@@ -244,7 +247,12 @@ export default function App() {
           role="tabpanel"
           aria-label={`${panelTitle} panel`}
         >
-          {activeTab === 'finance' && <FinancePanel />}
+          {activeTab === 'finance' && (
+            <FinancePanel
+              activeCountry={activeCountry}
+              onCountrySelect={handleCountrySelect}
+            />
+          )}
           {activeTab === 'events' && (
             <EventsPanel
               activeTypes={activeLayers}

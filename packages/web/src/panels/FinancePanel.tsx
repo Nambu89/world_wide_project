@@ -10,8 +10,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getMarkets,
   getMarketTrend,
+  getSanctions,
   type MarketInstrument,
   type PricePoint,
+  type SanctionCountry,
 } from '../api/client';
 
 // ---------------------------------------------------------------------------
@@ -196,6 +198,103 @@ function InstrumentCard({ instrument, selected, onClick }: InstrumentCardProps) 
 }
 
 // ---------------------------------------------------------------------------
+// SanctionsSection — ranked OFAC sanctions per country (folded into Finance)
+// ---------------------------------------------------------------------------
+
+type SanctionsState =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'empty' }
+  | { status: 'ok'; rows: SanctionCountry[] };
+
+interface SanctionsSectionProps {
+  activeCountry: string | null;
+  onCountrySelect: (country: string) => void;
+}
+
+function SanctionsSection({ activeCountry, onCountrySelect }: SanctionsSectionProps) {
+  const [state, setState] = useState<SanctionsState>({ status: 'loading' });
+
+  const load = useCallback(() => {
+    setState({ status: 'loading' });
+    getSanctions()
+      .then((rows) => {
+        if (rows.length === 0) {
+          setState({ status: 'empty' });
+        } else {
+          const sorted = [...rows].sort((a, b) => b.sanctionedCount - a.sanctionedCount);
+          setState({ status: 'ok', rows: sorted });
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        setState({ status: 'error', message });
+      });
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <section className="sanctions-section" aria-label="OFAC sanctions">
+      <h2 className="finance-panel__heading">OFAC Sanctions</h2>
+
+      {state.status === 'loading' && (
+        <div className="state-loading" role="status">
+          <div className="spinner" aria-hidden="true" />
+          <span>Loading sanctions...</span>
+        </div>
+      )}
+
+      {state.status === 'error' && (
+        <div className="state-error" role="alert">
+          <div className="state-error__title">Failed to load sanctions</div>
+          <div>{state.message}</div>
+          <button className="state-error__retry" onClick={load} type="button">Retry</button>
+        </div>
+      )}
+
+      {state.status === 'empty' && (
+        <div className="state-empty" role="status">
+          <div className="state-empty__icon" aria-hidden="true">--</div>
+          <div>No sanctions data available</div>
+        </div>
+      )}
+
+      {state.status === 'ok' && (
+        <ul className="sanctions-list" role="list" aria-label="Countries by sanctioned-entity count">
+          {state.rows.map((s) => (
+            <li
+              key={s.country}
+              className={`sanctions-row${activeCountry === s.country ? ' active' : ''}`}
+              style={{ listStyle: 'none' }}
+            >
+              <button
+                type="button"
+                className="sanctions-row__btn"
+                onClick={() => onCountrySelect(s.country)}
+                aria-pressed={activeCountry === s.country}
+                aria-label={`Select ${s.country} — ${s.sanctionedCount} sanctioned entities`}
+              >
+                <span className="sanctions-row__country">{s.country}</span>
+                <span className="sanctions-row__count">{s.sanctionedCount.toLocaleString()}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <footer className="sanctions-section__attribution" aria-label="Data attribution">
+        Datos:{' '}
+        <a href="https://www.opensanctions.org" target="_blank" rel="noopener noreferrer">
+          OpenSanctions
+        </a>
+        {' '}(OFAC SDN, CC BY-NC)
+      </footer>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // FinancePanel
 // ---------------------------------------------------------------------------
 
@@ -205,7 +304,14 @@ type PanelState =
   | { status: 'empty' }
   | { status: 'ok'; instruments: MarketInstrument[] };
 
-export default function FinancePanel() {
+interface FinancePanelProps {
+  /** Country currently selected — highlights the matching sanctions row. */
+  activeCountry: string | null;
+  /** Called when user selects a sanctions row — parent syncs map fly-to. */
+  onCountrySelect: (country: string) => void;
+}
+
+export default function FinancePanel({ activeCountry, onCountrySelect }: FinancePanelProps) {
   const [panelState, setPanelState] = useState<PanelState>({ status: 'loading' });
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
 
@@ -275,6 +381,8 @@ export default function FinancePanel() {
           ))}
         </ul>
       )}
+
+      <SanctionsSection activeCountry={activeCountry} onCountrySelect={onCountrySelect} />
     </div>
   );
 }

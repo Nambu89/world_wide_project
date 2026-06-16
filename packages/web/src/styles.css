@@ -407,6 +407,68 @@ html, body, #root {
 }
 
 /* ============================================================
+   OFAC Sanctions section (folded into Finance — D-501)
+   ============================================================ */
+.sanctions-section {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.sanctions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+}
+
+.sanctions-row__btn {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s;
+}
+
+.sanctions-row__btn:hover {
+  border-color: var(--color-accent);
+}
+
+.sanctions-row.active .sanctions-row__btn {
+  border-color: var(--color-accent);
+  background-color: rgba(139, 92, 246, 0.12); /* violet tint — matches map glyph (D-502) */
+}
+
+.sanctions-row__country {
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sanctions-row__count {
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
+  color: #a78bfa; /* violet — sanctions signature (D-502) */
+  flex-shrink: 0;
+}
+
+.sanctions-section__attribution {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================
    Panel tab switcher
    ============================================================ */
 .panel-tabs {
