@@ -24,11 +24,7 @@ import { isAllowedFeedUrl, FEED_ALLOWLIST } from './allowlist.js';
 
 // ─── Contrato público ────────────────────────────────────────────────────────
 
-export interface ConnectorResult<T> {
-  data: T[];
-  stale: boolean;
-  fetchedAt: number;
-}
+import type { ConnectorResult } from '../types.js';
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 

@@ -36,11 +36,7 @@ const MAX_CENTROID_DISTANCE_DEG = 9;
 
 // ─── Tipo ConnectorResult (local, igual que gdelt.ts) ────────────────────────
 
-export interface ConnectorResult<T> {
-  data: T[];
-  stale: boolean;
-  fetchedAt: number;
-}
+import type { ConnectorResult } from '../types.js';
 
 // ─── Single-flight + serve-stale ─────────────────────────────────────────────
 

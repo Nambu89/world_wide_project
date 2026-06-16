@@ -155,11 +155,7 @@ function nearestCountry(lat: number, lon: number): string | null {
 
 // ─── Result type (compatible con ConnectorResult exportado por gdelt.ts) ──────
 
-export interface ConnectorResult<T> {
-  data: T[];
-  stale: boolean;
-  fetchedAt: number;
-}
+import type { ConnectorResult } from '../types.js';
 
 // ─── Single-flight + serve-stale ─────────────────────────────────────────────
 

@@ -74,11 +74,7 @@ const EXPECTED_COLUMNS = 27; // D-201: cada fila DEBE tener exactamente 27 colum
 
 // ─── Tipo ConnectorResult (compatible con gdelt.ts y usgs.ts) ─────────────────
 
-export interface ConnectorResult<T> {
-  data: T[];
-  stale: boolean;
-  fetchedAt: number;
-}
+import type { ConnectorResult } from '../types.js';
 
 // ─── Single-flight + serve-stale ─────────────────────────────────────────────
 

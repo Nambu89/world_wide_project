@@ -61,11 +61,7 @@ const EXPECTED_COLUMNS = 61; // R-3: cada fila DEBE tener exactamente 61 columna
 
 // ─── Tipo ConnectorResult (local, igual al de usgs.ts) ───────────────────────
 
-export interface ConnectorResult<T> {
-  data: T[];
-  stale: boolean;
-  fetchedAt: number;
-}
+import type { ConnectorResult } from '../types.js';
 
 // ─── Single-flight + serve-stale ─────────────────────────────────────────────
 
