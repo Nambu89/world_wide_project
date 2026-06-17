@@ -14,6 +14,15 @@ test('parseInsights: valid JSON array', () => {
   assert.equal(r[0].severity, 'alta');
 });
 
+test('parseInsights: parses countries/chokepoints; defaults to [] when absent', () => {
+  const withEnt = parseInsights(JSON.stringify([{ title: 'A', consequences: ['x'], countries: ['Iraq'], chokepoints: ['hormuz'] }]));
+  assert.deepEqual(withEnt[0].countries, ['Iraq']);
+  assert.deepEqual(withEnt[0].chokepoints, ['hormuz']);
+  const without = parseInsights(JSON.stringify([{ title: 'B', consequences: ['y'] }]));
+  assert.deepEqual(without[0].countries, []);
+  assert.deepEqual(without[0].chokepoints, []);
+});
+
 test('parseInsights: strips ```json fences', () => {
   const r = parseInsights('```json\n[{"title":"X","consequences":["y"]}]\n```');
   assert.equal(r.length, 1);

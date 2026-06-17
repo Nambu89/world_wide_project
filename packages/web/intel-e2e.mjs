@@ -45,7 +45,13 @@ async function run() {
   const tabs = await page.locator('.panel-tab').all();
   const tabTexts = await Promise.all(tabs.map((t) => t.textContent()));
   const hasIntel = tabTexts.some((t) => t && t.trim() === 'Inteligencia');
-  record('CHECK 2 — 7th tab "Inteligencia" exists', hasIntel, `tabs(${tabs.length}): ${JSON.stringify(tabTexts)}`);
+  record('CHECK 2 — "Inteligencia" tab exists', hasIntel, `tabs(${tabs.length}): ${JSON.stringify(tabTexts)}`);
+  // D-801: Inteligencia is the 1st tab and the default landing.
+  record('CHECK 2 — Inteligencia is the 1st tab', (tabTexts[0] || '').trim() === 'Inteligencia', `first=${(tabTexts[0] || '').trim()}`);
+  // Open the panel drawer (mobile starts collapsed; desktop sidebar already open) WITHOUT clicking a tab,
+  // to prove the default landing panel is Inteligencia.
+  const landingIsIntel = await page.locator('.intel-panel').isVisible().catch(() => false);
+  record('CHECK 2 — default landing = IntelPanel (no tab click)', landingIsIntel, landingIsIntel ? 'intel-panel visible on load' : 'not default');
 
   let cardCount = 0, badTitles = 0, emptyShown = false;
   const severities = [];
@@ -72,6 +78,18 @@ async function run() {
       let sorted = true;
       for (let i = 1; i < severities.length; i++) if (sevRank[severities[i]] > sevRank[severities[i - 1]]) { sorted = false; break; }
       record('CHECK 4 — cards ordered by severity', sorted, severities.join(','));
+
+      // CHECK 5 — map-tie: click the first card → it gets .active + map canvas present (flyTo).
+      const firstBtn = page.locator('.intel-card__btn').first();
+      if ((await firstBtn.count()) > 0) {
+        await firstBtn.click();
+        await page.waitForTimeout(1200);
+        const activeCount = await page.locator('.intel-card.active').count();
+        record('CHECK 5 — card click → .intel-card.active', activeCount > 0, `active=${activeCount}`);
+        const canvas = page.locator('.map-container canvas');
+        record('CHECK 5 — map canvas present (flyTo target)', (await canvas.count()) > 0, (await canvas.count()) > 0 ? 'canvas' : 'none');
+        await page.screenshot({ path: `${SCREENSHOT_DIR}/intel-03-maptie-1200.png` });
+      }
     } else {
       record('CHECK 3 — empty-state shown (no batch yet, valid per D-705)', emptyShown, emptyShown ? 'empty-state visible' : 'NO cards AND NO empty-state (FAIL)');
     }

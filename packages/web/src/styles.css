@@ -688,6 +688,30 @@ html, body, #root {
   color: var(--color-text-secondary);
 }
 
+/* Clickable card (slice C map-tie) */
+.intel-card__btn {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: inherit;
+  font: inherit;
+}
+
+.intel-card.active {
+  border-color: var(--color-accent);
+  background-color: rgba(59, 130, 246, 0.08);
+}
+
+.intel-card__btn:hover .intel-card__title {
+  color: var(--color-accent);
+}
+
 /* ============================================================
    Panel tab switcher
    ============================================================ */

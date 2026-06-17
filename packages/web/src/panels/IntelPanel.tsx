@@ -27,7 +27,14 @@ function sevLabel(s: Insight['severity']): string {
   return s === 'alta' ? 'Alta' : s === 'media' ? 'Media' : 'Baja';
 }
 
-export default function IntelPanel() {
+interface IntelPanelProps {
+  /** Called when a card is clicked — App routes to map-tie (D-803). */
+  onSelect?: (insight: Insight) => void;
+  /** Id of the currently selected card — for visual highlight. */
+  activeId?: string | null;
+}
+
+export default function IntelPanel({ onSelect, activeId }: IntelPanelProps) {
   const [state, setState] = useState<PanelState>({ status: 'loading' });
 
   const load = useCallback(() => {
@@ -85,7 +92,14 @@ export default function IntelPanel() {
       {state.status === 'ok' && (
         <ul className="intel-list" role="list" aria-label="Tarjetas de inteligencia por severidad">
           {state.result.insights.map((c) => (
-            <li key={c.id} className="intel-card" role="listitem">
+            <li key={c.id} className={`intel-card${activeId === c.id ? ' active' : ''}`} role="listitem">
+              <button
+                type="button"
+                className="intel-card__btn"
+                onClick={() => onSelect?.(c)}
+                aria-pressed={activeId === c.id}
+                aria-label={`Insight: ${c.title}`}
+              >
               <div className="intel-card__header">
                 <span className="intel-card__title">{c.title}</span>
                 <span
@@ -119,6 +133,7 @@ export default function IntelPanel() {
               {c.affected.length > 0 && (
                 <div className="intel-card__affected">Afecta a: {c.affected.join(', ')}</div>
               )}
+              </button>
             </li>
           ))}
         </ul>

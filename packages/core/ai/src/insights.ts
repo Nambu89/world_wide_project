@@ -19,6 +19,8 @@ export interface Insight {
   triggers: string[];          // real signals this is based on
   consequences: string[];      // predicted chain
   affected: string[];          // economies / commodities
+  countries: string[];         // involved country names (English, match CII keys) — map-tie
+  chokepoints: string[];       // involved chokepoint ids (e.g. 'hormuz') — map-tie
   severity: 'alta' | 'media' | 'baja';
   confidence: 'alta' | 'media' | 'baja';
 }
@@ -82,10 +84,14 @@ export function buildInsightsPrompt(context: string): string {
       'señales anteriores; cita disparadores reales; marca las consecuencias como predicción.',
     '',
     'Sé conciso: máximo 3 consecuencias por tarjeta, frases breves (≤20 palabras).',
+    'Incluye en cada tarjeta los países involucrados (campo "countries", nombres en inglés tal como ' +
+      'aparecen en el contexto, p.ej. "Iraq","Russia") y los chokepoints involucrados (campo "chokepoints", ' +
+      'ids en minúscula: hormuz, suez, bab-el-mandeb, malacca, panama, bosphorus, gibraltar, dover, ' +
+      'danish-straits, taiwan, good-hope, magellan). Vacíos si no aplica.',
     'Responde SOLO con un array JSON (sin texto fuera del JSON), cada elemento:',
     '{"id":"slug-corto","title":"titular es","category":"energia|comercio|geopolitica|conflicto|mercados|clima|otro",' +
-      '"triggers":["señal real 1","señal real 2"],"consequences":["consecuencia predicha 1","..."],' +
-      '"affected":["UE","petróleo"],"severity":"alta|media|baja","confidence":"alta|media|baja"}',
+      '"triggers":["señal real 1"],"consequences":["consecuencia predicha 1"],"affected":["UE","petróleo"],' +
+      '"countries":["Iraq"],"chokepoints":["hormuz"],"severity":"alta|media|baja","confidence":"alta|media|baja"}',
   ].join('\n');
 }
 
@@ -138,6 +144,8 @@ export function parseInsights(text: string): Insight[] {
       triggers: Array.isArray(o['triggers']) ? o['triggers'].filter((x): x is string => typeof x === 'string') : [],
       consequences,
       affected: Array.isArray(o['affected']) ? o['affected'].filter((x): x is string => typeof x === 'string') : [],
+      countries: Array.isArray(o['countries']) ? o['countries'].filter((x): x is string => typeof x === 'string') : [],
+      chokepoints: Array.isArray(o['chokepoints']) ? o['chokepoints'].filter((x): x is string => typeof x === 'string') : [],
       severity: sev,
       confidence: conf,
     });

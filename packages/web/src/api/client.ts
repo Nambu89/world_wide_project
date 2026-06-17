@@ -858,6 +858,8 @@ export interface Insight {
   triggers: string[];
   consequences: string[];
   affected: string[];
+  countries: string[];      // involved country names (map-tie)
+  chokepoints: string[];    // involved chokepoint ids (map-tie)
   severity: 'alta' | 'media' | 'baja';
   confidence: 'alta' | 'media' | 'baja';
 }

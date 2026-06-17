@@ -30,6 +30,7 @@ import RiskPanel from './panels/RiskPanel';
 import ConvergencePanel from './panels/ConvergencePanel';
 import ChokepointsPanel from './panels/ChokepointsPanel';
 import IntelPanel from './panels/IntelPanel';
+import type { Insight } from './api/client';
 import { LAYERS, TOGGLE_KEYS } from './map/layers.config';
 
 // ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ type PanelTab = 'finance' | 'events' | 'radar' | 'risk' | 'convergence' | 'choke
 export default function App() {
   const [activeLayers, setActiveLayers] = useState<Set<string>>(buildInitialActive);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<PanelTab>('events');
+  const [activeTab, setActiveTab] = useState<PanelTab>('intel'); // D-801: IA-first landing
   /**
    * activeSection: the currently selected radar section.
    * Selecting a section in RadarPanel → enables the sig-* toggle for that section
@@ -81,6 +82,8 @@ export default function App() {
   const [activeCountry, setActiveCountry] = useState<string | null>(null);
   /** activeChokepoint: chokepoint id selected in ChokepointsPanel (slice A map-tie). */
   const [activeChokepoint, setActiveChokepoint] = useState<string | null>(null);
+  /** activeInsightId: insight card selected in IntelPanel (slice C map-tie highlight). */
+  const [activeInsightId, setActiveInsightId] = useState<string | null>(null);
 
   /** Toggle a single layer key in the activeLayers set. */
   const toggleLayer = (key: string) => {
@@ -136,6 +139,17 @@ export default function App() {
       next.add('chokepoints');
       return next;
     });
+  };
+
+  /**
+   * Called by IntelPanel when an insight card is selected (slice C map-tie, D-803).
+   * Prefers a chokepoint (more specific/visual), else the first country. flyTo no-ops
+   * gracefully if the entity isn't on the map.
+   */
+  const handleInsightSelect = (insight: Insight) => {
+    setActiveInsightId(insight.id);
+    if (insight.chokepoints.length > 0) handleChokepointSelect(insight.chokepoints[0]!);
+    else if (insight.countries.length > 0) handleCountrySelect(insight.countries[0]!);
   };
 
   /** Label for a legacy map toggle (non-events). */
@@ -207,6 +221,16 @@ export default function App() {
           <button
             role="tab"
             type="button"
+            className={`panel-tab${activeTab === 'intel' ? ' active' : ''}`}
+            aria-selected={activeTab === 'intel'}
+            aria-controls="panel-content"
+            onClick={() => setActiveTab('intel')}
+          >
+            Inteligencia
+          </button>
+          <button
+            role="tab"
+            type="button"
             className={`panel-tab${activeTab === 'finance' ? ' active' : ''}`}
             aria-selected={activeTab === 'finance'}
             aria-controls="panel-content"
@@ -264,16 +288,6 @@ export default function App() {
           >
             Rutas
           </button>
-          <button
-            role="tab"
-            type="button"
-            className={`panel-tab${activeTab === 'intel' ? ' active' : ''}`}
-            aria-selected={activeTab === 'intel'}
-            aria-controls="panel-content"
-            onClick={() => setActiveTab('intel')}
-          >
-            Inteligencia
-          </button>
         </div>
 
         {/* Panel content */}
@@ -319,7 +333,9 @@ export default function App() {
               onSelect={handleChokepointSelect}
             />
           )}
-          {activeTab === 'intel' && <IntelPanel />}
+          {activeTab === 'intel' && (
+            <IntelPanel onSelect={handleInsightSelect} activeId={activeInsightId} />
+          )}
         </div>
       </aside>
     </div>
