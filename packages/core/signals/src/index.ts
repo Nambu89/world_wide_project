@@ -34,3 +34,15 @@ export { ciiMagnitude, clamp01, marketRiskOff, marketStress, marketVol } from '.
 
 // Orquestador IO (T-30) — arma observaciones desde el store y delega en la función pura
 export { detectAllConvergence } from './observe.js';
+
+// Chokepoints (slice A) — dataset + scorer + orquestador IO
+export {
+  CHOKEPOINTS,
+  DEFAULT_RADIUS_KM,
+  CHOKEPOINT_WINDOW_MS,
+  CHOKEPOINT_WEIGHTS,
+  CHOKEPOINT_SAT,
+  CHOKEPOINT_BANDS,
+  type ChokepointConfig,
+} from './chokepoints.config.js';
+export { scoreChokepoints, detectAllChokepoints, haversineKm } from './chokepoints.js';

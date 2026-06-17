@@ -182,6 +182,23 @@ export interface SanctionRow {
   capturedAt: number;
 }
 
+// ─── Chokepoint status (slice A) ─────────────────────────────────────────────
+
+/**
+ * Chokepoint disruption status snapshot — camelCase (L-1).
+ * Persisted as a time-series append in `chokepoint_status` (migration 007).
+ * status: 'calm' | 'watch' | 'disrupted'. score: 0..1.
+ * componentsJson: JSON of the scoring breakdown (eventScore/signalScore/nameScore/counts).
+ */
+export interface ChokepointStatusRow {
+  id?: number;
+  chokepointId: string;
+  status: 'calm' | 'watch' | 'disrupted';
+  score: number;
+  componentsJson: string;
+  capturedAt: number;
+}
+
 // ─── CII Snapshots (T-21, ADR-CII) ───────────────────────────────────────────
 
 /**

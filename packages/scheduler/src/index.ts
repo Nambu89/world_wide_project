@@ -42,6 +42,7 @@ import {
   getPriorCii,
   insertConvergenceSignals,
   insertSanctions,
+  insertChokepointStatus,
   purgeAndDownsample,
   type MarketSnapshot,
   type NewsItem,
@@ -50,6 +51,7 @@ import {
   type CiiSnapshotRow,
   type ConvergenceSignalRow,
   type SanctionRow,
+  type ChokepointStatusRow,
 } from '@www/store';
 
 import { generateDailyBriefing } from '@www/core-ai';
@@ -58,7 +60,8 @@ import type { Briefing } from '@www/store';
 import { computeAllCountries, computeDynamic, type CiiScore } from '@www/core-cii';
 
 // T-31: convergencia encadenada DENTRO del job cii (orden por construcción, C-4/D-312).
-import { detectAllConvergence } from '@www/core-signals';
+// Slice A: detectAllChokepoints (sibling medium job).
+import { detectAllConvergence, detectAllChokepoints } from '@www/core-signals';
 
 // ─── ConnectorResult contract ─────────────────────────────────────────────────
 // Mirrors the structural type exported by @www/connectors (finance/markets.ts).
@@ -207,6 +210,10 @@ export interface SchedulerDeps {
   detectAllConvergence:     (nowMs: number) => Promise<ConvergenceSignalRow[]>;
   insertConvergenceSignals: (rows: ConvergenceSignalRow[]) => Promise<void>;
 
+  // Chokepoints pipeline (@www/core-signals + @www/store) — slice A
+  detectAllChokepoints:    (nowMs: number) => Promise<ChokepointStatusRow[]>;
+  insertChokepointStatus:  (rows: ChokepointStatusRow[]) => Promise<void>;
+
   // AI pipeline (@www/core-ai) — defaults to real implementation
   generateDailyBriefing: () => Promise<Briefing>;
 }
@@ -236,6 +243,8 @@ const REAL_STORE_AI_DEPS: Pick<
   | 'insertCiiSnapshots'
   | 'detectAllConvergence'
   | 'insertConvergenceSignals'
+  | 'detectAllChokepoints'
+  | 'insertChokepointStatus'
   | 'generateDailyBriefing'
 > = {
   insertMarketSnapshots,
@@ -249,6 +258,8 @@ const REAL_STORE_AI_DEPS: Pick<
   insertCiiSnapshots,
   detectAllConvergence,
   insertConvergenceSignals,
+  detectAllChokepoints,
+  insertChokepointStatus,
   generateDailyBriefing,
 };
 
@@ -488,6 +499,24 @@ export function defaultJobs(
     },
   };
 
+  // ── chokepoints job (medium tier) — slice A ───────────────────────────────
+  // Reads recent events+signals via detectAllChokepoints (store-backed) and
+  // persists per-chokepoint disruption status. Sibling of cii (same medium tier);
+  // eventually consistent with the latest gdelt/gkg writes.
+  const chokepointsJob: Job = {
+    name: 'chokepoints',
+    tier: 'medium',
+    intervalMs: intervals.medium,
+    async run() {
+      const now = Date.now();
+      const rows = await (deps?.detectAllChokepoints ?? storeAi.detectAllChokepoints)(now);
+      if (rows.length > 0) {
+        await storeAi.insertChokepointStatus(rows);
+        console.log(`[scheduler] chokepoints: persisted ${rows.length} status rows`);
+      }
+    },
+  };
+
   // ── sanctions job (slow tier) — T-37: OFAC sanctions pipeline ───────────
   // D-105: sanctions change slowly; slow tier (30 min) matches news.
   // ADR-004: persist BEFORE serving — insertSanctions before any read.
@@ -562,5 +591,7 @@ export function defaultJobs(
   // T-18 order: markets · usgs · eonet · gdelt · gkg · news · daily
   // T-24 order: markets · usgs · eonet · gdelt · gkg · cii · news · daily
   // T-37 order: markets · usgs · eonet · gdelt · gkg · cii · news · sanctions · daily
-  return [marketsJob, usgsJob, eonetJob, gdeltJob, gkgJob, ciiJob, newsJob, sanctionsJob, dailyJob];
+  // Slice A: chokepoints job (medium) added after cii.
+  // Order: markets · usgs · eonet · gdelt · gkg · cii · chokepoints · news · sanctions · daily
+  return [marketsJob, usgsJob, eonetJob, gdeltJob, gkgJob, ciiJob, chokepointsJob, newsJob, sanctionsJob, dailyJob];
 }

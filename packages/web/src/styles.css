@@ -469,16 +469,122 @@ html, body, #root {
 }
 
 /* ============================================================
+   Chokepoints / Rutas panel (slice A)
+   ============================================================ */
+.chokepoints-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+}
+
+.chokepoints-row__btn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s;
+}
+
+.chokepoints-row__btn:hover {
+  border-color: var(--color-accent);
+}
+
+.chokepoints-row.active .chokepoints-row__btn {
+  border-color: var(--color-accent);
+  background-color: rgba(20, 184, 166, 0.10); /* teal tint — matches map glyph */
+}
+
+.chokepoints-row__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chokepoints-row__name {
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+}
+
+.chokepoints-row__status {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 1px var(--space-2);
+  border: 1px solid;
+  border-radius: var(--rounded-md);
+}
+
+.chokepoints-row__bar {
+  height: 4px;
+  background-color: var(--color-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.chokepoints-row__bar-fill {
+  height: 100%;
+}
+
+.chokepoints-row__commodities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.chokepoints-row__chip {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background-color: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  padding: 0 var(--space-2);
+}
+
+.chokepoints-row__impact {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+.chokepoints-row__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.chokepoints-panel__attribution {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================
    Panel tab switcher
    ============================================================ */
 .panel-tabs {
   display: flex;
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
+  overflow-x: auto;          /* 6 tabs scroll horizontally on narrow (375px) viewports */
+  scrollbar-width: thin;
 }
 
 .panel-tab {
-  flex: 1;
+  flex: 1 0 auto;            /* grow to fill on desktop; never shrink below content on mobile */
+  white-space: nowrap;
   padding: var(--space-2) var(--space-3);
   background: transparent;
   border: none;

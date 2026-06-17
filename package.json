@@ -18,7 +18,8 @@
     "@www/store": "workspace:*",
     "@www/connectors": "workspace:*",
     "@www/scheduler": "workspace:*",
-    "@www/core-ai": "workspace:*"
+    "@www/core-ai": "workspace:*",
+    "@www/core-signals": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

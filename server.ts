@@ -41,10 +41,12 @@ import {
   getCiiTrend,
   getLatestConvergence,
   getLatestSanctions,
+  getLatestChokepointStatus,
 } from '@www/store';
 import type { EventFilter, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '@www/store';
 import { COUNTRY_CENTROIDS } from './packages/connectors/geo/country-centroids.js';
 import { createScheduler, defaultJobs } from '@www/scheduler';
+import { CHOKEPOINTS } from '@www/core-signals';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -459,6 +461,34 @@ async function route(
         ...row,
         lat: centroid !== undefined ? centroid.lat : null,
         lon: centroid !== undefined ? centroid.lon : null,
+      };
+    });
+    sendJson(res, 200, payload);
+    return;
+  }
+
+  // ── /api/chokepoints ──────────────────────────────────────────────────────
+  // SOLO-LECTURA. Merges the static CHOKEPOINTS config (geometry + documented
+  // impact) with the latest disruption status per chokepoint. A chokepoint with
+  // no status snapshot yet defaults to calm/score 0. NEVER fires detection on-request.
+  if (pathname === '/api/chokepoints') {
+    const statusRows = await getLatestChokepointStatus();
+    const byId = new Map(statusRows.map((r) => [r.chokepointId, r]));
+    const payload = CHOKEPOINTS.map((cp) => {
+      const st = byId.get(cp.id);
+      return {
+        id: cp.id,
+        name: cp.name,
+        nameEs: cp.nameEs,
+        lat: cp.lat,
+        lon: cp.lon,
+        commodities: cp.commodities,
+        worldShare: cp.worldShare,
+        dependentEconomies: cp.dependentEconomies,
+        impactEs: cp.impactEs,
+        status: st ? st.status : 'calm',
+        score: st ? st.score : 0,
+        capturedAt: st ? st.capturedAt : null,
       };
     });
     sendJson(res, 200, payload);

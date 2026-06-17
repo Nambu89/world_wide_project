@@ -28,6 +28,7 @@ import RadarPanel, {
 } from './panels/RadarPanel';
 import RiskPanel from './panels/RiskPanel';
 import ConvergencePanel from './panels/ConvergencePanel';
+import ChokepointsPanel from './panels/ChokepointsPanel';
 import { LAYERS, TOGGLE_KEYS } from './map/layers.config';
 
 // ---------------------------------------------------------------------------
@@ -55,7 +56,7 @@ function buildInitialActive(): Set<string> {
 // Panel tab types
 // ---------------------------------------------------------------------------
 
-type PanelTab = 'finance' | 'events' | 'radar' | 'risk' | 'convergence';
+type PanelTab = 'finance' | 'events' | 'radar' | 'risk' | 'convergence' | 'chokepoints';
 
 // ---------------------------------------------------------------------------
 // App
@@ -77,6 +78,8 @@ export default function App() {
    * MapView reads it to flyTo that country's centroid; the panel row highlights.
    */
   const [activeCountry, setActiveCountry] = useState<string | null>(null);
+  /** activeChokepoint: chokepoint id selected in ChokepointsPanel (slice A map-tie). */
+  const [activeChokepoint, setActiveChokepoint] = useState<string | null>(null);
 
   /** Toggle a single layer key in the activeLayers set. */
   const toggleLayer = (key: string) => {
@@ -124,6 +127,16 @@ export default function App() {
     });
   };
 
+  /** Called by ChokepointsPanel when a chokepoint is selected (slice A map-tie). */
+  const handleChokepointSelect = (id: string) => {
+    setActiveChokepoint(id);
+    setActiveLayers((prev) => {
+      const next = new Set(prev);
+      next.add('chokepoints');
+      return next;
+    });
+  };
+
   /** Label for a legacy map toggle (non-events). */
   const labelForKey = (key: string): string => {
     return LAYERS.find((l) => l.toggleKey === key)?.label?.split(' ')[0] ?? key;
@@ -141,12 +154,13 @@ export default function App() {
     : activeTab === 'events' ? 'Events'
     : activeTab === 'radar' ? 'Radar'
     : activeTab === 'risk' ? 'Risk'
-    : 'Convergence';
+    : activeTab === 'convergence' ? 'Convergence'
+    : 'Rutas';
 
   return (
     <div className="app-layout">
       {/* Map — fills viewport on mobile, shrinks on desktop via CSS */}
-      <MapView activeLayers={activeLayers} activeCountry={activeCountry} />
+      <MapView activeLayers={activeLayers} activeCountry={activeCountry} activeChokepoint={activeChokepoint} />
 
       {/* Layer toggle controls (non-events legacy; event types controlled in panel) */}
       {legacyToggleKeys.length > 0 && (
@@ -238,6 +252,16 @@ export default function App() {
           >
             Convergence
           </button>
+          <button
+            role="tab"
+            type="button"
+            className={`panel-tab${activeTab === 'chokepoints' ? ' active' : ''}`}
+            aria-selected={activeTab === 'chokepoints'}
+            aria-controls="panel-content"
+            onClick={() => setActiveTab('chokepoints')}
+          >
+            Rutas
+          </button>
         </div>
 
         {/* Panel content */}
@@ -275,6 +299,12 @@ export default function App() {
             <ConvergencePanel
               activeCountry={activeCountry}
               onCountrySelect={handleCountrySelect}
+            />
+          )}
+          {activeTab === 'chokepoints' && (
+            <ChokepointsPanel
+              activeChokepoint={activeChokepoint}
+              onSelect={handleChokepointSelect}
             />
           )}
         </div>

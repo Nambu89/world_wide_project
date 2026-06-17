@@ -14,18 +14,20 @@
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
-import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, CONVERGENCE_LAYERS, SANCTIONS_LAYERS, LAYER_SOURCES } from './layers.config';
+import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, CONVERGENCE_LAYERS, SANCTIONS_LAYERS, CHOKEPOINT_LAYERS, LAYER_SOURCES } from './layers.config';
 import {
   getEvents,
   getSignals,
   getCii,
   getConvergence,
   getSanctions,
+  getChokepoints,
   type GlobalEvent,
   type RadarSignal,
   type CiiCountry,
   type ConvergenceCountry,
   type SanctionCountry,
+  type Chokepoint,
 } from '../api/client';
 
 interface Props {
@@ -35,6 +37,8 @@ interface Props {
    * Declarative tie: React state drives flyTo, no imperative map calls.
    */
   activeCountry?: string | null;
+  /** Chokepoint id selected in ChokepointsPanel — map flies to it when set (slice A). */
+  activeChokepoint?: string | null;
 }
 
 /** Convert GlobalEvent array to a GeoJSON FeatureCollection for the 'events' source. */
@@ -177,6 +181,21 @@ function sanctionsToGeoJSON(rows: SanctionCountry[]): GeoJSON.FeatureCollection 
   return { type: 'FeatureCollection', features };
 }
 
+/**
+ * Convert Chokepoint array to GeoJSON for the 'chokepoints' source (slice A).
+ * Property `status`/`id` are scalar (W-3) — drive the match paint + flyTo lookup.
+ */
+function chokepointsToGeoJSON(rows: Chokepoint[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: rows.map((c) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [c.lon, c.lat] },
+      properties: { id: c.id, nameEs: c.nameEs, status: c.status, score: c.score },
+    })),
+  };
+}
+
 /** Empty GeoJSON for initial source registration */
 const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
   type: 'FeatureCollection',
@@ -189,7 +208,7 @@ for (const id of LAYER_SOURCES) {
   SOURCE_INITIAL_DATA[id] = EMPTY_GEOJSON;
 }
 
-export default function MapView({ activeLayers, activeCountry }: Props) {
+export default function MapView({ activeLayers, activeCountry, activeChokepoint }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const mapReadyRef = useRef(false);
@@ -202,6 +221,8 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
   const convergenceDataRef = useRef<ConvergenceCountry[]>([]);
   /** Store latest sanctions data for map-tie flyTo (uses embedded lat/lon). */
   const sanctionsDataRef = useRef<SanctionCountry[]>([]);
+  /** Store latest chokepoints data for activeChokepoint flyTo. */
+  const chokepointsDataRef = useRef<Chokepoint[]>([]);
 
   // Initialize map once
   useEffect(() => {
@@ -254,7 +275,7 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
       }
 
       // Add all layers by iterating LAYERS + SIGNAL_LAYERS + CII_LAYERS + CONVERGENCE_LAYERS — NEVER add layers outside this loop
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS]) {
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS]) {
         if (map.getLayer(spec.id)) continue;
 
         // Build a plain object and cast to LayerSpecification at the call site.
@@ -299,7 +320,7 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
 
     const apply = () => {
       if (!mapReadyRef.current) return;
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS]) {
+      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS]) {
         if (!map.getLayer(spec.id)) continue;
         const visible = spec.visibleWhen(activeLayers);
         map.setLayoutProperty(spec.id, 'visibility', visible ? 'visible' : 'none');
@@ -517,6 +538,46 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
     };
   }, []);
 
+  // Load chokepoints from /api/chokepoints and inject into 'chokepoints' source (slice A).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const rows = await getChokepoints();
+        if (cancelled) return;
+
+        chokepointsDataRef.current = rows;
+
+        const injectData = () => {
+          if (!map || !mapReadyRef.current) return;
+          const source = map.getSource('chokepoints') as GeoJSONSource | undefined;
+          if (source) {
+            source.setData(chokepointsToGeoJSON(rows));
+          }
+        };
+
+        if (mapReadyRef.current) {
+          injectData();
+        } else {
+          map.once('load', injectData);
+        }
+      } catch {
+        // Graceful: upstream failure leaves source as empty GeoJSON (no crash).
+        // ChokepointsPanel shows its own error state independently.
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Map-tie: when activeCountry changes (from RiskPanel or ConvergencePanel selection),
   // fly to that country. Searches convergenceDataRef FIRST (uses embedded lat/lon — R-2/D-406),
   // then falls through to ciiDataRef. Purely declarative React state, no imperative add.
@@ -559,6 +620,16 @@ export default function MapView({ activeLayers, activeCountry }: Props) {
       duration: 800,
     });
   }, [activeCountry]);
+
+  // Map-tie: fly to a chokepoint when activeChokepoint changes (slice A).
+  useEffect(() => {
+    if (!activeChokepoint) return;
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return;
+    const cp = chokepointsDataRef.current.find((c) => c.id === activeChokepoint);
+    if (!cp) return;
+    map.flyTo({ center: [cp.lon, cp.lat], zoom: 5, duration: 800 });
+  }, [activeChokepoint]);
 
   return (
     <div

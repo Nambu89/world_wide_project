@@ -21,7 +21,7 @@ import {
   type ConnectorResult,
 } from '../src/index.js';
 
-import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '@www/store';
+import type { MarketSnapshot, NewsItem, Briefing, EventRow, SignalRow, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from '@www/store';
 import type { CiiScore } from '@www/core-cii';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -446,21 +446,22 @@ describe('createScheduler', () => {
 
 describe('defaultJobs', () => {
   // T-11: 6 jobs; T-18: 7 jobs; T-24: now 8 jobs (+cii medium, D-211)
-  it('returns exactly 9 jobs: markets/usgs/eonet/gdelt/gkg/cii/news/sanctions/daily', () => {
+  it('returns exactly 10 jobs: markets/usgs/eonet/gdelt/gkg/cii/chokepoints/news/sanctions/daily', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
-    assert.equal(jobs.length, 9, `Expected 9 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
+    assert.equal(jobs.length, 10, `Expected 10 jobs, got ${jobs.length}: ${jobs.map((j) => j.name).join(',')}`);
 
     const names = jobs.map((j) => j.name);
-    assert.ok(names.includes('markets'),   'should include markets job');
-    assert.ok(names.includes('usgs'),      'should include usgs job');
-    assert.ok(names.includes('eonet'),     'should include eonet job');
-    assert.ok(names.includes('gdelt'),     'should include gdelt job');
-    assert.ok(names.includes('gkg'),       'should include gkg job');
-    assert.ok(names.includes('cii'),       'should include cii job');
-    assert.ok(names.includes('news'),      'should include news job');
-    assert.ok(names.includes('sanctions'), 'should include sanctions job');
-    assert.ok(names.includes('daily'),     'should include daily job');
+    assert.ok(names.includes('markets'),     'should include markets job');
+    assert.ok(names.includes('usgs'),        'should include usgs job');
+    assert.ok(names.includes('eonet'),       'should include eonet job');
+    assert.ok(names.includes('gdelt'),       'should include gdelt job');
+    assert.ok(names.includes('gkg'),         'should include gkg job');
+    assert.ok(names.includes('cii'),         'should include cii job');
+    assert.ok(names.includes('chokepoints'), 'should include chokepoints job');
+    assert.ok(names.includes('news'),        'should include news job');
+    assert.ok(names.includes('sanctions'),   'should include sanctions job');
+    assert.ok(names.includes('daily'),       'should include daily job');
   });
 
   // T-11: verify tier assignments per D-105; T-18: gkg=medium (D-204)
@@ -483,11 +484,40 @@ describe('defaultJobs', () => {
 
   // T-11: [markets, usgs, eonet, gdelt, news, daily]; T-18: +gkg
   // T-24: return order is [markets, usgs, eonet, gdelt, gkg, cii, news, daily]
-  it('job order is [markets, usgs, eonet, gdelt, gkg, cii, news, sanctions, daily]', () => {
+  it('job order is [markets, usgs, eonet, gdelt, gkg, cii, chokepoints, news, sanctions, daily]', () => {
     const deps = makeDeps();
     const jobs = defaultJobs(undefined, deps);
     const order = jobs.map((j) => j.name);
-    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'cii', 'news', 'sanctions', 'daily']);
+    assert.deepEqual(order, ['markets', 'usgs', 'eonet', 'gdelt', 'gkg', 'cii', 'chokepoints', 'news', 'sanctions', 'daily']);
+  });
+
+  // Slice A: chokepoints job (medium) → detectAllChokepoints + insertChokepointStatus
+  it('chokepoints job: detectAllChokepoints → insertChokepointStatus with rows', async () => {
+    const inserted: ChokepointStatusRow[] = [];
+    const deps: Partial<SchedulerDeps> = {
+      detectAllChokepoints: async () => [
+        { chokepointId: 'hormuz', status: 'disrupted', score: 0.8, componentsJson: '{}', capturedAt: Date.now() },
+      ],
+      insertChokepointStatus: async (rows) => { inserted.push(...rows); },
+    };
+    const jobs = defaultJobs(undefined, deps);
+    const cp = jobs.find((j) => j.name === 'chokepoints');
+    assert.ok(cp, 'chokepoints job exists');
+    assert.equal(cp.tier, 'medium', 'chokepoints is medium tier');
+    await cp.run();
+    assert.equal(inserted.length, 1, '1 status row persisted');
+    assert.equal(inserted[0]?.chokepointId, 'hormuz');
+  });
+
+  it('chokepoints job: detectAllChokepoints returns [] → no insert', async () => {
+    let calls = 0;
+    const deps: Partial<SchedulerDeps> = {
+      detectAllChokepoints: async () => [],
+      insertChokepointStatus: async () => { calls++; },
+    };
+    const jobs = defaultJobs(undefined, deps);
+    await jobs.find((j) => j.name === 'chokepoints')!.run();
+    assert.equal(calls, 0, 'no insert when no rows');
   });
 
   // T-37: sanctions job (slow) → fetchSanctions + insertSanctions

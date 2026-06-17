@@ -612,16 +612,47 @@ export const SANCTIONS_LAYERS: LayerSpec[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// CHOKEPOINT_LAYERS — trade chokepoints (slice A). Circle by disruption status.
+// Distinct from country layers: status colors (teal/amber/red) on sea lanes.
+// Toggle 'chokepoints' ON by default (D-604, headline feature).
+// Property (W-3 scalar): id, status, score.
+// ---------------------------------------------------------------------------
+const CHOKEPOINT_COLOR = [
+  'match', ['get', 'status'],
+  'disrupted', '#ef4444',  // red
+  'watch', '#f59e0b',      // amber
+  '#14b8a6',               // calm — teal (default)
+];
+
+export const CHOKEPOINT_LAYERS: LayerSpec[] = [
+  {
+    id: 'chokepoints',
+    source: 'chokepoints',
+    type: 'circle',
+    label: 'Rutas / Chokepoints',
+    toggleKey: 'chokepoints',
+    visibleWhen: (active) => active.has('chokepoints'),
+    paint: {
+      'circle-color': CHOKEPOINT_COLOR,
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 6, 8, 12],
+      'circle-opacity': 0.85,
+      'circle-stroke-width': 2,
+      'circle-stroke-color': '#ffffff',
+    },
+  },
+];
+
 /** All unique source ids needed by all layer arrays */
 export const LAYER_SOURCES = [
   ...new Set(
-    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS].map((l) => l.source)
+    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS].map((l) => l.source)
   ),
 ];
 
-/** All unique toggle keys (events + signals + cii + convergence + sanctions) */
+/** All unique toggle keys (events + signals + cii + convergence + sanctions + chokepoints) */
 export const TOGGLE_KEYS = [
   ...new Set(
-    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS].map((l) => l.toggleKey)
+    [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS].map((l) => l.toggleKey)
   ),
 ];

@@ -6,10 +6,10 @@
 import type { Client as LibsqlClient } from '@libsql/client';
 import { getDb, _resetDbForTesting } from './db.js';
 import { migrate as runMigrations } from './migrate.js';
-import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from './types.js';
+import type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from './types.js';
 
 // Re-export types so consumers don't need a separate import
-export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from './types.js';
+export type { MarketSnapshot, GdeltEvent, NewsItem, Briefing, EventRow, EventFilter, SignalRow, SignalTrendPoint, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from './types.js';
 
 // ─── DB singleton ────────────────────────────────────────────────────────────
 
@@ -647,6 +647,12 @@ export async function purgeAndDownsample(beforeMs: number): Promise<void> {
     sql: 'DELETE FROM sanctions WHERE captured_at < ?',
     args: [beforeMs],
   });
+
+  // Step 9 — Purge chokepoint_status older than beforeMs (slice A).
+  await client.execute({
+    sql: 'DELETE FROM chokepoint_status WHERE captured_at < ?',
+    args: [beforeMs],
+  });
 }
 
 // ─── CII Snapshots API (T-21) ─────────────────────────────────────────────────
@@ -894,6 +900,55 @@ function rowToSanctionRow(r: Record<string, unknown>): SanctionRow {
   const base: SanctionRow = {
     country: String(r['country']),
     sanctionedCount: Number(r['sanctioned_count']),
+    capturedAt: Number(r['captured_at']),
+  };
+  if (r['id'] != null) {
+    base.id = Number(r['id']);
+  }
+  return base;
+}
+
+// ─── Chokepoint status API (slice A) ─────────────────────────────────────────
+
+/**
+ * Appends chokepoint status rows — INSERT only (time-series). No-op for empty arrays.
+ */
+export async function insertChokepointStatus(rows: ChokepointStatusRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const client = getDb();
+  for (const row of rows) {
+    await client.execute({
+      sql: `INSERT INTO chokepoint_status (chokepoint_id, status, score, components_json, captured_at)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [row.chokepointId, row.status, row.score, row.componentsJson, row.capturedAt],
+    });
+  }
+}
+
+/**
+ * Returns the most recent status snapshot per chokepoint (1 row per id, MAX captured_at).
+ */
+export async function getLatestChokepointStatus(): Promise<ChokepointStatusRow[]> {
+  const client = getDb();
+  const result = await client.execute(`
+    SELECT c.*
+    FROM chokepoint_status c
+    INNER JOIN (
+      SELECT chokepoint_id, MAX(captured_at) AS max_ts
+      FROM chokepoint_status
+      GROUP BY chokepoint_id
+    ) latest ON c.chokepoint_id = latest.chokepoint_id AND c.captured_at = latest.max_ts
+    ORDER BY c.chokepoint_id
+  `);
+  return result.rows.map(rowToChokepointStatusRow);
+}
+
+function rowToChokepointStatusRow(r: Record<string, unknown>): ChokepointStatusRow {
+  const base: ChokepointStatusRow = {
+    chokepointId: String(r['chokepoint_id']),
+    status: String(r['status']) as ChokepointStatusRow['status'],
+    score: Number(r['score']),
+    componentsJson: String(r['components_json']),
     capturedAt: Number(r['captured_at']),
   };
   if (r['id'] != null) {

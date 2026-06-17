@@ -788,3 +788,60 @@ export async function getSanctions(): Promise<SanctionCountry[]> {
   if (!Array.isArray(raw)) return [];
   return raw.map(adaptSanctionRow);
 }
+
+// ---------------------------------------------------------------------------
+// Chokepoints (slice A) — trade routes + disruption status + documented impact
+// ---------------------------------------------------------------------------
+
+/** Raw chokepoint row from /api/chokepoints. WIRE FORMAT = camelCase (D-606 / L-1). */
+interface RawChokepointRow {
+  id: string;
+  name: string;
+  nameEs: string;
+  lat: number;
+  lon: number;
+  commodities: string[];
+  worldShare: string;
+  dependentEconomies: string[];
+  impactEs: string;
+  status: 'calm' | 'watch' | 'disrupted';
+  score: number;
+  capturedAt: number | null;
+}
+
+/** View-model for a chokepoint consumed by ChokepointsPanel + MapView. */
+export interface Chokepoint {
+  id: string;
+  name: string;
+  nameEs: string;
+  lat: number;
+  lon: number;
+  commodities: string[];
+  worldShare: string;
+  dependentEconomies: string[];
+  impactEs: string;
+  status: 'calm' | 'watch' | 'disrupted';
+  score: number;
+  capturedAt: string | null;   // ISO or null
+}
+
+function adaptChokepoint(r: RawChokepointRow): Chokepoint {
+  return {
+    id: r.id, name: r.name, nameEs: r.nameEs, lat: r.lat, lon: r.lon,
+    commodities: Array.isArray(r.commodities) ? r.commodities : [],
+    worldShare: r.worldShare,
+    dependentEconomies: Array.isArray(r.dependentEconomies) ? r.dependentEconomies : [],
+    impactEs: r.impactEs, status: r.status, score: r.score,
+    capturedAt: r.capturedAt != null ? new Date(r.capturedAt).toISOString() : null,
+  };
+}
+
+/**
+ * Fetch chokepoints (geometry + documented impact + live disruption status) from /api/chokepoints.
+ * Attribution: rutas comerciales (datos propios) · disrupción derivada de GDELT/USGS/GKG.
+ */
+export async function getChokepoints(): Promise<Chokepoint[]> {
+  const raw = await apiFetch<RawChokepointRow[]>('/api/chokepoints');
+  if (!Array.isArray(raw)) return [];
+  return raw.map(adaptChokepoint);
+}

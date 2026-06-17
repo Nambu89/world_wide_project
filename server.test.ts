@@ -16,8 +16,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, insertSanctions, _resetDbForTesting } from '@www/store';
-import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, insertSanctions, insertChokepointStatus, _resetDbForTesting } from '@www/store';
+import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from '@www/store';
 import { createApp } from './server.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -277,6 +277,14 @@ describe('server.ts integration', () => {
       { country: 'ZZZ-NoMap', sanctionedCount: 3,    capturedAt: now5 },
     ];
     await insertSanctions(seedSanctions);
+
+    // Seed chokepoint status (slice A) — hormuz disrupted, suez calm; malacca unseeded → calm default
+    const now6 = Date.now();
+    const seedChokepoints: ChokepointStatusRow[] = [
+      { chokepointId: 'hormuz', status: 'disrupted', score: 0.82, componentsJson: '{"eventScore":0.9}', capturedAt: now6 },
+      { chokepointId: 'suez',   status: 'calm',      score: 0.04, componentsJson: '{}', capturedAt: now6 },
+    ];
+    await insertChokepointStatus(seedChokepoints);
 
     // Start server on ephemeral port (no scheduler)
     server = createApp({ startScheduler: false });
@@ -896,6 +904,33 @@ describe('server.ts integration', () => {
   it('GET /api/sanctions still 200 (regression sibling of cii/convergence)', async () => {
     const { status } = await get(server, '/api/sanctions');
     assert.equal(status, 200);
+  });
+
+  // ── /api/chokepoints (slice A) ────────────────────────────────────────────
+
+  it('GET /api/chokepoints → 200, merges status with static config (camelCase)', async () => {
+    const { status, body } = await get(server, '/api/chokepoints');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ id: string; nameEs: string; lat: number; lon: number; status: string; score: number; impactEs: string; commodities: string[] }>;
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.length >= 12, `expected ≥12 chokepoints, got ${rows.length}`);
+    const hormuz = rows.find((r) => r.id === 'hormuz');
+    assert.ok(hormuz, 'hormuz present');
+    assert.equal(hormuz.status, 'disrupted', 'seeded status merged');
+    assert.equal(hormuz.nameEs, 'Estrecho de Ormuz', 'config nameEs merged');
+    assert.ok(typeof hormuz.lat === 'number' && typeof hormuz.lon === 'number', 'geometry merged');
+    assert.ok(hormuz.impactEs.length > 0, 'documented impact merged');
+    assert.ok(Array.isArray(hormuz.commodities), 'commodities array');
+  });
+
+  it('GET /api/chokepoints → chokepoint without a status snapshot defaults to calm', async () => {
+    const { status, body } = await get(server, '/api/chokepoints');
+    assert.equal(status, 200);
+    const rows = JSON.parse(body) as Array<{ id: string; status: string; score: number }>;
+    const malacca = rows.find((r) => r.id === 'malacca');
+    assert.ok(malacca, 'unseeded chokepoint still listed (from config)');
+    assert.equal(malacca.status, 'calm', 'defaults to calm');
+    assert.equal(malacca.score, 0, 'defaults to score 0');
   });
 
   // ── Regression guard: previous endpoints still green after T-33 ──────────

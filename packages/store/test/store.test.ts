@@ -37,8 +37,10 @@ import {
   getPriorConvergence,
   insertSanctions,
   getLatestSanctions,
+  insertChokepointStatus,
+  getLatestChokepointStatus,
 } from '../src/index.js';
-import type { EventRow, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '../src/index.js';
+import type { EventRow, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from '../src/index.js';
 
 function makeInMemoryClient(): LibsqlClient {
   return createClient({ url: ':memory:' });
@@ -1593,5 +1595,37 @@ describe('purgeAndDownsample() — purges sanctions, convergence_signals intact'
       "SELECT name FROM sqlite_master WHERE type='table' AND name='cii_snapshots'",
     );
     assert.equal(ciiTable.rows.length, 1, 'cii_snapshots table still intact');
+  });
+});
+
+// ─── Suite 29: insertChokepointStatus + getLatestChokepointStatus (slice A) ────
+
+describe('insertChokepointStatus() + getLatestChokepointStatus()', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+  });
+
+  it('insert + getLatest returns latest per chokepoint', async () => {
+    const now = Date.now();
+    const rows: ChokepointStatusRow[] = [
+      { chokepointId: 'hormuz', status: 'watch', score: 0.3, componentsJson: '{}', capturedAt: now - 1000 },
+      { chokepointId: 'hormuz', status: 'disrupted', score: 0.8, componentsJson: '{}', capturedAt: now },
+      { chokepointId: 'suez', status: 'calm', score: 0.05, componentsJson: '{}', capturedAt: now },
+    ];
+    await insertChokepointStatus(rows);
+
+    const latest = await getLatestChokepointStatus();
+    const hormuz = latest.filter((r) => r.chokepointId === 'hormuz');
+    assert.equal(hormuz.length, 1, 'one latest row per chokepoint');
+    assert.equal(hormuz[0]?.status, 'disrupted', 'latest hormuz status');
+    assert.equal(hormuz[0]?.score, 0.8, 'latest hormuz score');
+    const suez = latest.find((r) => r.chokepointId === 'suez');
+    assert.equal(suez?.status, 'calm', 'suez present');
+  });
+
+  it('handles empty array without error', async () => {
+    await insertChokepointStatus([]); // must not throw
   });
 });
