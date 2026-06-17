@@ -47,6 +47,7 @@ import type { EventFilter, Section, CiiSnapshotRow, ConvergenceSignalRow, Sancti
 import { COUNTRY_CENTROIDS } from './packages/connectors/geo/country-centroids.js';
 import { createScheduler, defaultJobs } from '@www/scheduler';
 import { CHOKEPOINTS } from '@www/core-signals';
+import { parseInsights } from '@www/core-ai';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -258,6 +259,21 @@ async function route(
       return;
     }
     sendJson(res, 200, { briefing });
+    return;
+  }
+
+  // ── /api/insights ─────────────────────────────────────────────────────────
+  // SOLO-LECTURA. Returns the latest intel insight batch (briefings domain='intel',
+  // body_md = JSON array). Serves the last batch even if stale (nowMs=0). NEVER calls
+  // the LLM on-request — generation happens in the scheduler daily job (ADR-004).
+  if (pathname === '/api/insights') {
+    const cached = await getCachedBriefing('intel', 0);
+    const insights = cached ? parseInsights(cached.body_md) : [];
+    sendJson(res, 200, {
+      insights,
+      generatedAt: cached ? cached.created_at : null,
+      model: cached ? cached.model : null,
+    });
     return;
   }
 

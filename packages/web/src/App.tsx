@@ -29,6 +29,7 @@ import RadarPanel, {
 import RiskPanel from './panels/RiskPanel';
 import ConvergencePanel from './panels/ConvergencePanel';
 import ChokepointsPanel from './panels/ChokepointsPanel';
+import IntelPanel from './panels/IntelPanel';
 import { LAYERS, TOGGLE_KEYS } from './map/layers.config';
 
 // ---------------------------------------------------------------------------
@@ -56,7 +57,7 @@ function buildInitialActive(): Set<string> {
 // Panel tab types
 // ---------------------------------------------------------------------------
 
-type PanelTab = 'finance' | 'events' | 'radar' | 'risk' | 'convergence' | 'chokepoints';
+type PanelTab = 'finance' | 'events' | 'radar' | 'risk' | 'convergence' | 'chokepoints' | 'intel';
 
 // ---------------------------------------------------------------------------
 // App
@@ -155,7 +156,8 @@ export default function App() {
     : activeTab === 'radar' ? 'Radar'
     : activeTab === 'risk' ? 'Risk'
     : activeTab === 'convergence' ? 'Convergence'
-    : 'Rutas';
+    : activeTab === 'chokepoints' ? 'Rutas'
+    : 'Inteligencia';
 
   return (
     <div className="app-layout">
@@ -262,6 +264,16 @@ export default function App() {
           >
             Rutas
           </button>
+          <button
+            role="tab"
+            type="button"
+            className={`panel-tab${activeTab === 'intel' ? ' active' : ''}`}
+            aria-selected={activeTab === 'intel'}
+            aria-controls="panel-content"
+            onClick={() => setActiveTab('intel')}
+          >
+            Inteligencia
+          </button>
         </div>
 
         {/* Panel content */}
@@ -307,6 +319,7 @@ export default function App() {
               onSelect={handleChokepointSelect}
             />
           )}
+          {activeTab === 'intel' && <IntelPanel />}
         </div>
       </aside>
     </div>

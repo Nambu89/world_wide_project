@@ -54,7 +54,7 @@ import {
   type ChokepointStatusRow,
 } from '@www/store';
 
-import { generateDailyBriefing } from '@www/core-ai';
+import { generateDailyBriefing, generateInsights } from '@www/core-ai';
 import type { Briefing } from '@www/store';
 
 import { computeAllCountries, computeDynamic, type CiiScore } from '@www/core-cii';
@@ -216,6 +216,9 @@ export interface SchedulerDeps {
 
   // AI pipeline (@www/core-ai) — defaults to real implementation
   generateDailyBriefing: () => Promise<Briefing>;
+
+  // Insights pipeline (@www/core-ai) — slice B; generated in the daily job after the briefing.
+  generateInsights: () => Promise<unknown[]>;
 }
 
 // ConnectorDeps type alias (backwards compat — server.ts uses SchedulerDeps directly)
@@ -246,6 +249,7 @@ const REAL_STORE_AI_DEPS: Pick<
   | 'detectAllChokepoints'
   | 'insertChokepointStatus'
   | 'generateDailyBriefing'
+  | 'generateInsights'
 > = {
   insertMarketSnapshots,
   upsertEvents,
@@ -261,6 +265,7 @@ const REAL_STORE_AI_DEPS: Pick<
   detectAllChokepoints,
   insertChokepointStatus,
   generateDailyBriefing,
+  generateInsights,
 };
 
 /**
@@ -584,6 +589,14 @@ export function defaultJobs(
       console.log(
         `[scheduler] daily: purgeAndDownsample before ${new Date(beforeMs).toISOString()} complete`,
       );
+
+      // 3. Slice B: generate intel insights AFTER the briefing (context populated).
+      try {
+        const insights = await (deps?.generateInsights ?? storeAi.generateInsights)();
+        console.log(`[scheduler] daily: generated ${insights.length} intel insights`);
+      } catch {
+        console.warn('[scheduler] daily: insights generation failed (non-fatal)');
+      }
     },
   };
 

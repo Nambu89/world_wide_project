@@ -16,7 +16,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, insertSanctions, insertChokepointStatus, _resetDbForTesting } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, insertSanctions, insertChokepointStatus, saveBriefing, _resetDbForTesting } from '@www/store';
 import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from '@www/store';
 import { createApp } from './server.js';
 
@@ -285,6 +285,13 @@ describe('server.ts integration', () => {
       { chokepointId: 'suez',   status: 'calm',      score: 0.04, componentsJson: '{}', capturedAt: now6 },
     ];
     await insertChokepointStatus(seedChokepoints);
+
+    // Seed intel insights batch (slice B) — stored as JSON in briefings domain='intel'
+    await saveBriefing({
+      domain: 'intel',
+      body_md: JSON.stringify([{ id: 'ormuz-oil', title: 'Tensión en Ormuz', category: 'energia', triggers: ['hormuz: disrupted'], consequences: ['Brent↑', 'gas EU↑'], affected: ['UE'], severity: 'alta', confidence: 'media' }]),
+      model: 'test', created_at: Date.now(), valid_until: Date.now() + 3600_000,
+    });
 
     // Start server on ephemeral port (no scheduler)
     server = createApp({ startScheduler: false });
@@ -931,6 +938,27 @@ describe('server.ts integration', () => {
     assert.ok(malacca, 'unseeded chokepoint still listed (from config)');
     assert.equal(malacca.status, 'calm', 'defaults to calm');
     assert.equal(malacca.score, 0, 'defaults to score 0');
+  });
+
+  // ── /api/insights (slice B) ───────────────────────────────────────────────
+
+  it('GET /api/insights → 200 with parsed insight cards', async () => {
+    const { status, body } = await get(server, '/api/insights');
+    assert.equal(status, 200);
+    const parsed = JSON.parse(body) as { insights: Array<{ title: string; consequences: string[]; severity: string }>; generatedAt: number | null; model: string | null };
+    assert.ok(Array.isArray(parsed.insights), 'insights array');
+    const ormuz = parsed.insights.find((i) => i.title === 'Tensión en Ormuz');
+    assert.ok(ormuz, 'seeded card present');
+    assert.ok(ormuz.consequences.length >= 1, 'has consequences');
+    assert.equal(ormuz.severity, 'alta');
+    assert.ok(parsed.model === 'test', 'model echoed from cache');
+  });
+
+  it('GET /api/insights → solo-lectura (no LLM on request; returns seeded batch exactly)', async () => {
+    const { status, body } = await get(server, '/api/insights');
+    assert.equal(status, 200);
+    const parsed = JSON.parse(body) as { insights: unknown[] };
+    assert.ok(parsed.insights.length >= 1, 'seeded batch served from cache, no LLM');
   });
 
   // ── Regression guard: previous endpoints still green after T-33 ──────────

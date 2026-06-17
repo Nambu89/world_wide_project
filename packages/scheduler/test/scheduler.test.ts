@@ -101,6 +101,7 @@ interface TrackingDeps extends SchedulerDeps {
   insertedNews:          NewsItem[];
   insertedSanctions:     SanctionRow[];
   briefingCalled:        number;
+  insightsCalled:        number;
   purgeCalled:           number;
   purgeCalledWithMs:     number[];
 }
@@ -121,6 +122,7 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
     insertedNews:       [],
     insertedSanctions:  [],
     briefingCalled:     0,
+    insightsCalled:     0,
     purgeCalled:        0,
     purgeCalledWithMs:  [],
 
@@ -252,6 +254,11 @@ function makeDeps(opts: MockOptions = {}): TrackingDeps {
         created_at:  now,
         valid_until: now + 86_400_000,
       };
+    },
+
+    async generateInsights(): Promise<unknown[]> {
+      tracking.insightsCalled++;
+      return [];
     },
   };
 
@@ -800,6 +807,7 @@ describe('defaultJobs', () => {
 
     assert.equal(deps.briefingCalled, 1, 'generateDailyBriefing called once');
     assert.equal(deps.purgeCalled,    1, 'purgeAndDownsample called once');
+    assert.equal(deps.insightsCalled, 1, 'generateInsights called once (slice B)');
   });
 
   it('daily job: purgeAndDownsample receives beforeMs = now - 90 days (approx)', async () => {

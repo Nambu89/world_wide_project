@@ -30,3 +30,14 @@ export {
   buildConvergenceContext,
   buildSanctionsContext,
 } from './briefing.js';
+
+// Motor de insights IA (slice B) — relaciona hotspots → predice consecuencias
+export {
+  INTEL_PERSONA,
+  buildChokepointContext,
+  buildIntelContext,
+  buildInsightsPrompt,
+  parseInsights,
+  generateInsights,
+  type Insight,
+} from './insights.js';

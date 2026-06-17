@@ -845,3 +845,45 @@ export async function getChokepoints(): Promise<Chokepoint[]> {
   if (!Array.isArray(raw)) return [];
   return raw.map(adaptChokepoint);
 }
+
+// ---------------------------------------------------------------------------
+// AI Insights (slice B) — relate hotspots → predicted consequence chains
+// ---------------------------------------------------------------------------
+
+/** A cause→consequence insight card. WIRE FORMAT = camelCase (already plain). */
+export interface Insight {
+  id: string;
+  title: string;
+  category: string;
+  triggers: string[];
+  consequences: string[];
+  affected: string[];
+  severity: 'alta' | 'media' | 'baja';
+  confidence: 'alta' | 'media' | 'baja';
+}
+
+interface RawInsightsResponse {
+  insights: Insight[];
+  generatedAt: number | null;
+  model: string | null;
+}
+
+export interface InsightsResult {
+  insights: Insight[];
+  generatedAt: string | null;   // ISO or null
+  model: string | null;
+}
+
+/**
+ * Fetch the latest AI insight batch from /api/insights.
+ * Empty array if no batch generated yet (LLM key missing or daily job not run) — graceful.
+ */
+export async function getInsights(): Promise<InsightsResult> {
+  const raw = await apiFetch<RawInsightsResponse>('/api/insights');
+  const insights = Array.isArray(raw?.insights) ? raw.insights : [];
+  return {
+    insights,
+    generatedAt: raw?.generatedAt != null ? new Date(raw.generatedAt).toISOString() : null,
+    model: raw?.model ?? null,
+  };
+}

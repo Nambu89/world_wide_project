@@ -572,6 +572,123 @@ html, body, #root {
 }
 
 /* ============================================================
+   Inteligencia / AI insights panel (slice B)
+   ============================================================ */
+.intel-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+}
+
+.intel-card {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+}
+
+.intel-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.intel-card__title {
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+}
+
+.intel-card__severity {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 1px var(--space-2);
+  border: 1px solid;
+  border-radius: var(--rounded-md);
+}
+
+.intel-card__meta {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.intel-card__category {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.intel-card__triggers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.intel-card__chip {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background-color: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  padding: 0 var(--space-2);
+}
+
+.intel-card__consequences {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.intel-card__consequence {
+  position: relative;
+  padding-left: 1.1em;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+.intel-card__consequence::before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  color: var(--color-accent);
+}
+
+.intel-card__affected {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.intel-panel__empty-title {
+  font-weight: var(--font-weight-medium);
+  margin-top: var(--space-2);
+}
+
+.intel-panel__empty-desc {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+}
+
+.intel-panel__attribution {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================
    Panel tab switcher
    ============================================================ */
 .panel-tabs {
