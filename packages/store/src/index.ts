@@ -65,6 +65,28 @@ export async function insertNewsItems(rows: NewsItem[]): Promise<void> {
   }
 }
 
+// ─── Translations cache (migr 008 — Slice D / D-903) ──────────────────────────
+// Presentation-layer cache for on-demand title translation (POST /api/translate).
+// Dedupe by source text (GDELT repeats headlines → repeats cost 0 tokens).
+
+/** Returns the cached Spanish translation of `source`, or null on miss. */
+export async function getTranslation(source: string): Promise<string | null> {
+  const rs = await getDb().execute({
+    sql: 'SELECT target FROM translations WHERE source = ?',
+    args: [source],
+  });
+  const row = rs.rows[0];
+  return row ? String(row['target']) : null;
+}
+
+/** Upserts a source→target translation (INSERT OR REPLACE keyed by source text). */
+export async function putTranslation(source: string, target: string): Promise<void> {
+  await getDb().execute({
+    sql: 'INSERT OR REPLACE INTO translations (source, target, created_at) VALUES (?, ?, ?)',
+    args: [source, target, Date.now()],
+  });
+}
+
 // ─── Reads ───────────────────────────────────────────────────────────────────
 
 /**

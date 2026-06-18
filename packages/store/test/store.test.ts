@@ -39,6 +39,8 @@ import {
   getLatestSanctions,
   insertChokepointStatus,
   getLatestChokepointStatus,
+  getTranslation,
+  putTranslation,
 } from '../src/index.js';
 import type { EventRow, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from '../src/index.js';
 
@@ -1627,5 +1629,33 @@ describe('insertChokepointStatus() + getLatestChokepointStatus()', () => {
 
   it('handles empty array without error', async () => {
     await insertChokepointStatus([]); // must not throw
+  });
+});
+
+// ─── Suite: translations cache (migr 008 — Slice D / D-903) ───────────────────
+
+describe('getTranslation() / putTranslation() — translation cache', () => {
+  before(async () => {
+    resetToMemory();
+    const { migrate } = await import('../src/index.js');
+    await migrate();
+  });
+
+  it('miss → null', async () => {
+    assert.equal(await getTranslation('no-such-text'), null);
+  });
+
+  it('put → get round-trips', async () => {
+    await putTranslation('oil tanker seized near Hormuz', 'petrolero incautado cerca de Ormuz');
+    assert.equal(
+      await getTranslation('oil tanker seized near Hormuz'),
+      'petrolero incautado cerca de Ormuz',
+    );
+  });
+
+  it('put on same source REPLACES (no duplicate, dedupe by source PK)', async () => {
+    await putTranslation('quake off Honshu', 'sismo frente a Honshu');
+    await putTranslation('quake off Honshu', 'terremoto frente a la costa de Honshu');
+    assert.equal(await getTranslation('quake off Honshu'), 'terremoto frente a la costa de Honshu');
   });
 });
