@@ -22,6 +22,7 @@
  *   GET /api/cii/:country         (T-25 — country CII trend; more specific, checked first)
  *   GET /api/cii                  (T-25 — latest CII snapshot per country + centroids)
  *   GET /api/convergence          (T-33 — latest convergence signal per country + centroids)
+ *   POST /api/translate           (Slice D / ADR-018 — SOLE write/LLM exception; cache-first on-demand translation)
  */
 
 import * as http from 'node:http';
@@ -42,12 +43,14 @@ import {
   getLatestConvergence,
   getLatestSanctions,
   getLatestChokepointStatus,
+  getTranslation,
+  putTranslation,
 } from '@www/store';
 import type { EventFilter, Section, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow } from '@www/store';
 import { COUNTRY_CENTROIDS } from './packages/connectors/geo/country-centroids.js';
 import { createScheduler, defaultJobs } from '@www/scheduler';
 import { CHOKEPOINTS } from '@www/core-signals';
-import { parseInsights } from '@www/core-ai';
+import { parseInsights, complete } from '@www/core-ai';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -189,6 +192,42 @@ function sendEmpty(res: http.ServerResponse, status: number): void {
   res.end();
 }
 
+/**
+ * Reads and JSON-parses a request body with a byte cap (Slice D / D-902).
+ * Resolves null on parse error, oversized body, or stream error — never rejects.
+ */
+function readJsonBody(
+  req: http.IncomingMessage,
+  maxBytes = 4096,
+): Promise<Record<string, unknown> | null> {
+  return new Promise((resolve) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > maxBytes) {
+        req.destroy();
+        resolve(null);
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (chunks.length === 0) {
+        resolve(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+        resolve(typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : null);
+      } catch {
+        resolve(null);
+      }
+    });
+    req.on('error', () => resolve(null));
+  });
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 async function route(
@@ -200,9 +239,36 @@ async function route(
   const pathname = url.pathname;
   const method = req.method ?? 'GET';
 
-  // Only GET is served (read-only store endpoints)
-  if (method !== 'GET') {
+  // Read-only store endpoints are GET. The SOLE exception is POST /api/translate
+  // (ADR-018 / D-902): user-initiated, cache-first, bounded on-demand translation.
+  if (method !== 'GET' && !(method === 'POST' && pathname === '/api/translate')) {
     sendJson(res, 405, { error: 'Method Not Allowed' });
+    return;
+  }
+
+  // ── POST /api/translate ─────────────────────────────────────────────────────
+  // ADR-018 / D-902: ÚNICA excepción a "no LLM on-request". Cache-first; dispara la
+  // IA solo en miss; degrada graciosa a { translated: null } si no hay LLM (D-907).
+  if (pathname === '/api/translate' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const text = typeof body?.['text'] === 'string' ? (body['text'] as string).trim() : '';
+    if (!text || text.length > 500) {
+      sendJson(res, 400, { error: 'text required (1..500 chars)' });
+      return;
+    }
+    const cached = await getTranslation(text);
+    if (cached !== null) {
+      sendJson(res, 200, { translated: cached });
+      return;
+    }
+    try {
+      const prompt = `Traduce al español. Devuelve SOLO la traducción, sin comillas ni preámbulo:\n\n${text}`;
+      const out = (await complete(prompt, { temperature: 0, maxTokens: 800 })).trim();
+      if (out) await putTranslation(text, out);
+      sendJson(res, 200, { translated: out || null });
+    } catch {
+      sendJson(res, 200, { translated: null });
+    }
     return;
   }
 
@@ -555,7 +621,7 @@ async function handleRequest(
     if (origin !== undefined && ALLOWED_ORIGINS.has(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     }
 

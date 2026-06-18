@@ -16,7 +16,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 
-import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, insertSanctions, insertChokepointStatus, saveBriefing, _resetDbForTesting } from '@www/store';
+import { migrate, insertMarketSnapshots, upsertEvents, upsertSignals, insertCiiSnapshots, insertConvergenceSignals, insertSanctions, insertChokepointStatus, saveBriefing, putTranslation, _resetDbForTesting } from '@www/store';
 import type { EventRow, SignalRow, SignalTrendPoint, CiiSnapshotRow, ConvergenceSignalRow, SanctionRow, ChokepointStatusRow } from '@www/store';
 import { createApp } from './server.js';
 
@@ -33,6 +33,47 @@ function get(server: http.Server, path: string): Promise<{ status: number; body:
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
     });
     req.on('error', reject);
+  });
+}
+
+function post(
+  server: http.Server,
+  path: string,
+  jsonBody: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 3001;
+    const payload = JSON.stringify(jsonBody);
+    const req = http.request(
+      { hostname: '127.0.0.1', port, path, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), ...headers } },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
+      },
+    );
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
+function options(
+  server: http.Server,
+  path: string,
+  origin: string,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 3001;
+    const req = http.request(
+      { hostname: '127.0.0.1', port, path, method: 'OPTIONS', headers: { Origin: origin } },
+      (res) => { res.on('data', () => {}); res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers })); },
+    );
+    req.on('error', reject);
+    req.end();
   });
 }
 
@@ -405,6 +446,47 @@ describe('server.ts integration', () => {
       req.end();
     });
     assert.equal(status, 405);
+  });
+
+  // ── POST /api/translate (Slice D / ADR-018 / D-902) ─────────────────────────
+
+  it('POST /api/translate cache HIT → 200 with cached translation (no LLM)', async () => {
+    // Seed the cache directly; the route must serve it without touching the LLM.
+    await putTranslation('seeded headline', 'titular sembrado');
+    const { status, body } = await post(server, '/api/translate', { text: 'seeded headline' });
+    assert.equal(status, 200);
+    const json = JSON.parse(body) as { translated: string | null };
+    assert.equal(json.translated, 'titular sembrado');
+  });
+
+  it('POST /api/translate empty text → 400', async () => {
+    const { status } = await post(server, '/api/translate', { text: '' });
+    assert.equal(status, 400);
+  });
+
+  it('POST /api/translate text > 500 chars → 400', async () => {
+    const { status } = await post(server, '/api/translate', { text: 'x'.repeat(501) });
+    assert.equal(status, 400);
+  });
+
+  it('POST /api/translate cache MISS degrades gracefully (200, translated string|null)', async () => {
+    // No OPENAI key in the test env → complete() throws → route returns { translated: null }.
+    // If a key IS present, a real translation string comes back. Both are valid (D-907).
+    const { status, body } = await post(server, '/api/translate', { text: 'uncached unique phrase 12345' });
+    assert.equal(status, 200);
+    const json = JSON.parse(body) as { translated: string | null };
+    assert.ok(json.translated === null || typeof json.translated === 'string', 'translated is null or string');
+  });
+
+  it('POST /api/markets → 405 (translate is the only POST exception)', async () => {
+    const { status } = await post(server, '/api/markets', { x: 1 });
+    assert.equal(status, 405);
+  });
+
+  it('OPTIONS /api/translate (allowed origin) → 204 + POST in Allow-Methods', async () => {
+    const { status, headers } = await options(server, '/api/translate', 'http://localhost:5173');
+    assert.equal(status, 204);
+    assert.ok(String(headers['access-control-allow-methods'] ?? '').includes('POST'), 'POST allowed');
   });
 
   // ── /api/events (T-12) ────────────────────────────────────────────────────
