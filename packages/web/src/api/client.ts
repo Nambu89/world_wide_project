@@ -592,10 +592,11 @@ function adaptSanctionRow(r: RawSanctionRow): SanctionCountry {
 
 const TIMEOUT_MS = 8000;
 
-async function apiFetch<T>(path: string): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     signal: AbortSignal.timeout(TIMEOUT_MS),
-    headers: { Accept: 'application/json' },
+    ...init,
+    headers: { Accept: 'application/json', ...(init?.headers ?? {}) },
   });
 
   if (!response.ok) {
@@ -603,6 +604,24 @@ async function apiFetch<T>(path: string): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+/**
+ * Slice D — on-demand Spanish translation of a free-text headline (events/signals).
+ * Hits POST /api/translate (cache-first server-side). Returns null on any failure
+ * so the popup degrades to "no disponible" instead of throwing (D-907).
+ */
+export async function translate(text: string): Promise<string | null> {
+  try {
+    const res = await apiFetch<{ translated: string | null }>('/api/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    return res?.translated ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
