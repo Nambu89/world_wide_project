@@ -22,6 +22,7 @@ import {
   getConvergence,
   getSanctions,
   getChokepoints,
+  translate,
   type GlobalEvent,
   type RadarSignal,
   type CiiCountry,
@@ -29,6 +30,23 @@ import {
   type SanctionCountry,
   type Chokepoint,
 } from '../api/client';
+import { buildPopupNode } from './popup';
+
+/**
+ * Layer ids that respond to clicks with a popup (Slice D / D-900). Derived from
+ * the same config arrays MapView iterates — heatmaps excluded (no clickable
+ * point features). NEVER a hardcoded parallel list (would desync on new layers).
+ */
+const INTERACTIVE_LAYER_IDS: string[] = [
+  ...LAYERS,
+  ...SIGNAL_LAYERS,
+  ...CII_LAYERS,
+  ...CONVERGENCE_LAYERS,
+  ...SANCTIONS_LAYERS,
+  ...CHOKEPOINT_LAYERS,
+]
+  .filter((l) => l.type !== 'heatmap')
+  .map((l) => l.id);
 
 interface Props {
   activeLayers: Set<string>;
@@ -297,6 +315,28 @@ export default function MapView({ activeLayers, activeCountry, activeChokepoint 
         } as unknown as maplibregl.LayerSpecification;
 
         map.addLayer(layerDef);
+      }
+
+      // ── Slice D / D-900 — click → Spanish popup ─────────────────────────────
+      // One handler; queryRenderedFeatures over the interactive (non-heatmap)
+      // layers. A single reused Popup instance (D-908). Hidden layers (toggle OFF)
+      // return no features, so popups respect visibility (R-6).
+      const popup = new maplibregl.Popup({ closeButton: true, maxWidth: '320px' });
+      map.on('click', (e) => {
+        const ids = INTERACTIVE_LAYER_IDS.filter((id) => map.getLayer(id));
+        const feats = map.queryRenderedFeatures(e.point, { layers: ids });
+        const f = feats[0];
+        if (!f || f.geometry.type !== 'Point') {
+          popup.remove();
+          return;
+        }
+        const coords = f.geometry.coordinates as [number, number];
+        popup.setLngLat(coords).setDOMContent(buildPopupNode(f, translate)).addTo(map);
+      });
+      // Pointer cursor over interactive layers (UX affordance).
+      for (const id of INTERACTIVE_LAYER_IDS) {
+        map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
       }
 
       mapReadyRef.current = true;
