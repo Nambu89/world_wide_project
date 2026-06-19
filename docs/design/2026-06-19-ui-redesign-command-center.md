@@ -138,7 +138,7 @@ Reescritura de las secciones de panel/tabs/cards/popup/toggles a `{chrome.hud}`.
 
 ## Risks
 
-- **R-1 — basemap remoto falla / lento** (CARTO down o red) → mapa en blanco. *Mitigación*: error handler en el `Map` → fallback al `style` raster-OSM actual (graceful); el resto de la UI no depende del basemap (D-1001).
+- **R-1 — basemap remoto falla / lento** (CARTO down o red) → mapa sin tiles. *Mitigación (lean, revisada tras plan-checker)*: `.map-container` con fondo oscuro `--bg` → un basemap ausente se ve oscuro, no roto/blanco; `map.on('error')` loguea. **Se DESCARTA el auto-`setStyle(raster)`** porque `setStyle()` elimina sources/capas y no re-inyecta los datos ya fetchados (re-registro frágil). La app necesita conectividad para datos/LLM de todos modos. Hard raster-fallback DIFERIDO (D-1001).
 - **R-2 — el reskin rompe un selector del E2E de Slice D** (clase renombrada) → E2E rojo. *Mitigación*: el reskin reusa las clases existentes (`.map-popup__*`, `.intel-card__*`, `.panel-tab`); si alguna cambia, se actualiza el E2E (D-1010). Verificar lista de selectores que el E2E toca ANTES de renombrar.
 - **R-3 — glow-layers duplican features y bajan FPS** con muchos puntos → lag. *Mitigación*: glow solo en circle-layers (no heatmap), opacidad/blur baratos; medir en smoke; si lag, limitar glow a las capas clave (cii/chokepoints) (D-1002).
 - **R-4 — ToS de CARTO basemap** para uso (aunque personal). *Mitigación*: GAP-1, verificar en research; atribución visible obligatoria; alternativa keyless = estilo MapLibre demotiles o un style.json propio si CARTO no encaja.
