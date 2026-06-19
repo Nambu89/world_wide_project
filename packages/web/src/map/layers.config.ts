@@ -653,15 +653,16 @@ export const CHOKEPOINT_LAYERS: LayerSpec[] = [
 // ---------------------------------------------------------------------------
 
 const GLOW_SCALE = 2.2;
+/** Glow halo radius (zoom-aware, valid top-level interpolate). Used when the base
+ *  radius is an expression — MapLibre forbids wrapping a zoom expr in `['*', ...]`. */
+const GLOW_RADIUS = ['interpolate', ['linear'], ['zoom'], 2, 10, 8, 26];
 
 /** Derive the glow twin of a circle LayerSpec. */
 export function glowOf(spec: LayerSpec): LayerSpec {
   const r = spec.paint?.['circle-radius'] as unknown;
-  const radius = Array.isArray(r)
-    ? ['*', r, GLOW_SCALE]
-    : typeof r === 'number'
-      ? r * GLOW_SCALE
-      : 14;
+  // Only a plain number can be scaled; expression radii (zoom interpolates) use
+  // the standalone GLOW_RADIUS (can't be multiplied — zoom must stay top-level).
+  const radius = typeof r === 'number' ? r * GLOW_SCALE : GLOW_RADIUS;
   return {
     ...spec,
     id: spec.id + '-glow',
