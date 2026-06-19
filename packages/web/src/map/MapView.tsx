@@ -281,6 +281,12 @@ export default function MapView({ activeLayers, activeCountry, activeChokepoint 
 
     mapRef.current = map;
 
+    // ponytail: expose the map in DEV so E2E can project a feature's coords to a
+    // pixel and click it reliably. No production effect (DEV-gated, read-only ref).
+    if (import.meta.env.DEV) {
+      (window as unknown as { __wwMap?: MapLibreMap }).__wwMap = map;
+    }
+
     map.on('load', () => {
       // Register all sources declared in LAYERS as empty GeoJSON
       for (const sourceId of LAYER_SOURCES) {

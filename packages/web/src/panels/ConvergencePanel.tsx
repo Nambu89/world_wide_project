@@ -20,6 +20,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getConvergence, type ConvergenceCountry } from '../api/client';
+import { localizeCountry } from '../i18n/countries';
+
+/** Data-family label (Spanish). */
+const FAMILY_ES: Record<string, string> = { events: 'eventos', signals: 'señales', markets: 'mercados' };
+/** Dimension label (Spanish). */
+const DIMENSION_ES: Record<string, string> = { conflict: 'conflicto', economic: 'económico', political: 'político', social: 'social' };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -104,7 +110,7 @@ export default function ConvergencePanel({
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setState({ status: 'error', message });
       });
   }, []);
@@ -116,23 +122,23 @@ export default function ConvergencePanel({
 
   return (
     <div className="convergence-panel">
-      <h2 className="convergence-panel__heading">Convergence Signals</h2>
+      <h2 className="convergence-panel__heading">Señales de convergencia</h2>
 
       {/* Loading */}
       {state.status === 'loading' && (
         <div className="state-loading" role="status">
           <div className="spinner" aria-hidden="true" />
-          <span>Loading convergence signals...</span>
+          <span>Cargando señales de convergencia…</span>
         </div>
       )}
 
       {/* Error — network or server failure */}
       {state.status === 'error' && (
         <div className="state-error" role="alert">
-          <div className="state-error__title">Failed to load convergence data</div>
+          <div className="state-error__title">Error al cargar datos de convergencia</div>
           <div>{state.message}</div>
           <button className="state-error__retry" onClick={load} type="button">
-            Retry
+            Reintentar
           </button>
         </div>
       )}
@@ -166,26 +172,26 @@ export default function ConvergencePanel({
                 type="button"
                 className="convergence-panel__row-btn"
                 onClick={() => onCountrySelect(s.country)}
-                aria-label={`Select ${s.country} — convergence strength ${(s.strength * 100).toFixed(0)}%`}
+                aria-label={`Seleccionar ${localizeCountry(s.country)} — fuerza de convergencia ${(s.strength * 100).toFixed(0)}%`}
                 aria-pressed={activeCountry === s.country}
               >
                 {/* Header: country + sourceCount badge */}
                 <div className="convergence-panel__row-header">
-                  <span className="convergence-panel__country-name">{s.country}</span>
+                  <span className="convergence-panel__country-name">{localizeCountry(s.country)}</span>
                   <span
                     className="convergence-panel__source-badge"
                     title={`${s.sourceCount} fuente${s.sourceCount === 1 ? '' : 's'}`}
                   >
-                    {s.sourceCount} src
+                    {s.sourceCount} fuentes
                   </span>
                 </div>
 
                 {/* Family badges (events+signals) */}
                 {s.families.length > 0 && (
-                  <div className="convergence-panel__families" aria-label="Data families">
+                  <div className="convergence-panel__families" aria-label="Familias de dato">
                     {s.families.map((f) => (
                       <span key={f} className="convergence-panel__family-badge">
-                        {f}
+                        {FAMILY_ES[f] ?? f}
                       </span>
                     ))}
                   </div>
@@ -196,7 +202,7 @@ export default function ConvergencePanel({
                   <div
                     className="convergence-panel__strength-track"
                     aria-hidden="true"
-                    title={`Strength: ${(s.strength * 100).toFixed(0)}%`}
+                    title={`Fuerza: ${(s.strength * 100).toFixed(0)}%`}
                   >
                     <div
                       className="convergence-panel__strength-fill"
@@ -209,7 +215,7 @@ export default function ConvergencePanel({
                   <span
                     className="convergence-panel__strength-num"
                     style={{ color: strengthColor(s.strength) }}
-                    title="Strength (0-1)"
+                    title="Fuerza (0-1)"
                   >
                     {(s.strength * 100).toFixed(0)}%
                   </span>
@@ -218,8 +224,8 @@ export default function ConvergencePanel({
                   <span
                     className="convergence-panel__trend-arrow"
                     style={{ color: trendColor(s.trend) }}
-                    title={`Trend: ${s.trend ?? 'stable'}`}
-                    aria-label={`Trend: ${s.trend ?? 'stable'}`}
+                    title={`Tendencia: ${s.trend ?? 'estable'}`}
+                    aria-label={`Tendencia: ${s.trend ?? 'estable'}`}
                   >
                     {trendArrow(s.trend)}
                   </span>
@@ -230,9 +236,9 @@ export default function ConvergencePanel({
                   {s.topDimension && (
                     <span
                       className="convergence-panel__top-dimension"
-                      title={`Top dimension: ${s.topDimension}`}
+                      title={`Dimensión principal: ${DIMENSION_ES[s.topDimension] ?? s.topDimension}`}
                     >
-                      {s.topDimension}
+                      {DIMENSION_ES[s.topDimension] ?? s.topDimension}
                     </span>
                   )}
                   <span className="convergence-panel__since">
@@ -246,7 +252,7 @@ export default function ConvergencePanel({
       )}
 
       {/* Attribution — always visible (D-107 / feedback_data_tos) */}
-      <footer className="convergence-panel__attribution" aria-label="Data attribution">
+      <footer className="convergence-panel__attribution" aria-label="Atribución de datos">
         Motor de convergencia propio{' '}
         <span className="convergence-panel__attr-sep" aria-hidden="true">·</span>{' '}
         datos:{' '}

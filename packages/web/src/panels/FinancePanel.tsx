@@ -15,6 +15,7 @@ import {
   type PricePoint,
   type SanctionCountry,
 } from '../api/client';
+import { localizeCountry } from '../i18n/countries';
 
 // ---------------------------------------------------------------------------
 // Sparkline
@@ -115,17 +116,17 @@ function Sparkline({ symbol }: SparklineProps) {
   }, [state]);
 
   if (state.status === 'loading') {
-    return <div className="sparkline-loading">Loading chart...</div>;
+    return <div className="sparkline-loading">Cargando gráfico...</div>;
   }
   if (state.status === 'error' || state.status === 'empty') {
-    return <div className="sparkline-loading">No chart data</div>;
+    return <div className="sparkline-loading">Sin datos de gráfico</div>;
   }
 
   return (
     <canvas
       ref={canvasRef}
       className="sparkline-canvas"
-      aria-label={`Price history for ${symbol}`}
+      aria-label={`Historial de precio de ${symbol}`}
     />
   );
 }
@@ -189,7 +190,7 @@ function InstrumentCard({ instrument, selected, onClick }: InstrumentCardProps) 
       </div>
       {selected && (
         <div className="sparkline-area">
-          <div className="sparkline-title">30-day trend</div>
+          <div className="sparkline-title">Tendencia 30 días</div>
           <Sparkline symbol={instrument.symbol} />
         </div>
       )}
@@ -227,7 +228,7 @@ function SanctionsSection({ activeCountry, onCountrySelect }: SanctionsSectionPr
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setState({ status: 'error', message });
       });
   }, []);
@@ -235,33 +236,33 @@ function SanctionsSection({ activeCountry, onCountrySelect }: SanctionsSectionPr
   useEffect(() => { load(); }, [load]);
 
   return (
-    <section className="sanctions-section" aria-label="OFAC sanctions">
-      <h2 className="finance-panel__heading">OFAC Sanctions</h2>
+    <section className="sanctions-section" aria-label="Sanciones OFAC">
+      <h2 className="finance-panel__heading">Sanciones OFAC</h2>
 
       {state.status === 'loading' && (
         <div className="state-loading" role="status">
           <div className="spinner" aria-hidden="true" />
-          <span>Loading sanctions...</span>
+          <span>Cargando sanciones...</span>
         </div>
       )}
 
       {state.status === 'error' && (
         <div className="state-error" role="alert">
-          <div className="state-error__title">Failed to load sanctions</div>
+          <div className="state-error__title">Error al cargar sanciones</div>
           <div>{state.message}</div>
-          <button className="state-error__retry" onClick={load} type="button">Retry</button>
+          <button className="state-error__retry" onClick={load} type="button">Reintentar</button>
         </div>
       )}
 
       {state.status === 'empty' && (
         <div className="state-empty" role="status">
           <div className="state-empty__icon" aria-hidden="true">--</div>
-          <div>No sanctions data available</div>
+          <div>Sin datos de sanciones disponibles</div>
         </div>
       )}
 
       {state.status === 'ok' && (
-        <ul className="sanctions-list" role="list" aria-label="Countries by sanctioned-entity count">
+        <ul className="sanctions-list" role="list" aria-label="Países por entidades sancionadas">
           {state.rows.map((s) => (
             <li
               key={s.country}
@@ -273,9 +274,9 @@ function SanctionsSection({ activeCountry, onCountrySelect }: SanctionsSectionPr
                 className="sanctions-row__btn"
                 onClick={() => onCountrySelect(s.country)}
                 aria-pressed={activeCountry === s.country}
-                aria-label={`Select ${s.country} — ${s.sanctionedCount} sanctioned entities`}
+                aria-label={`Seleccionar ${localizeCountry(s.country)} — ${s.sanctionedCount} entidades sancionadas`}
               >
-                <span className="sanctions-row__country">{s.country}</span>
+                <span className="sanctions-row__country">{localizeCountry(s.country)}</span>
                 <span className="sanctions-row__count">{s.sanctionedCount.toLocaleString()}</span>
               </button>
             </li>
@@ -283,7 +284,7 @@ function SanctionsSection({ activeCountry, onCountrySelect }: SanctionsSectionPr
         </ul>
       )}
 
-      <footer className="sanctions-section__attribution" aria-label="Data attribution">
+      <footer className="sanctions-section__attribution" aria-label="Atribución de datos">
         Datos:{' '}
         <a href="https://www.opensanctions.org" target="_blank" rel="noopener noreferrer">
           OpenSanctions
@@ -326,7 +327,7 @@ export default function FinancePanel({ activeCountry, onCountrySelect }: Finance
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setPanelState({ status: 'error', message });
       });
   }, []);
@@ -341,21 +342,21 @@ export default function FinancePanel({ activeCountry, onCountrySelect }: Finance
 
   return (
     <div className="finance-panel">
-      <h2 className="finance-panel__heading">Markets</h2>
+      <h2 className="finance-panel__heading">Mercados</h2>
 
       {panelState.status === 'loading' && (
-        <div className="state-loading" role="status" aria-label="Loading markets">
+        <div className="state-loading" role="status" aria-label="Cargando mercados">
           <div className="spinner" aria-hidden="true" />
-          <span>Loading markets...</span>
+          <span>Cargando mercados...</span>
         </div>
       )}
 
       {panelState.status === 'error' && (
         <div className="state-error" role="alert">
-          <div className="state-error__title">Failed to load markets</div>
+          <div className="state-error__title">Error al cargar mercados</div>
           <div>{panelState.message}</div>
           <button className="state-error__retry" onClick={load} type="button">
-            Retry
+            Reintentar
           </button>
         </div>
       )}
@@ -363,8 +364,8 @@ export default function FinancePanel({ activeCountry, onCountrySelect }: Finance
       {panelState.status === 'empty' && (
         <div className="state-empty" role="status">
           <div className="state-empty__icon" aria-hidden="true">--</div>
-          <div>No market data available</div>
-          <div>The data source may be temporarily unavailable.</div>
+          <div>Sin datos de mercado disponibles</div>
+          <div>La fuente de datos puede estar temporalmente no disponible.</div>
         </div>
       )}
 

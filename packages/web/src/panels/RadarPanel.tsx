@@ -24,6 +24,7 @@ import {
   type RadarSignal,
   type SignalTrendPoint,
 } from '../api/client';
+import { localizeCountry } from '../i18n/countries';
 
 // ---------------------------------------------------------------------------
 // Section metadata
@@ -32,7 +33,7 @@ import {
 export const RADAR_SECTIONS = [
   {
     key: 'political_instability' as const,
-    label: 'Political Instability',
+    label: 'Inestabilidad política',
     icon: 'PI',
     color: 'var(--color-danger)',
     hasSignalLayer: false,  // reuses events geo — no sig-* toggle key
@@ -40,7 +41,7 @@ export const RADAR_SECTIONS = [
   },
   {
     key: 'commodities_energy' as const,
-    label: 'Commodities & Energy',
+    label: 'Materias primas y energía',
     icon: 'CE',
     color: '#f59e0b',
     hasSignalLayer: true,
@@ -48,7 +49,7 @@ export const RADAR_SECTIONS = [
   },
   {
     key: 'critical_minerals' as const,
-    label: 'Critical Minerals',
+    label: 'Minerales críticos',
     icon: 'CM',
     color: '#14b8a6',
     hasSignalLayer: true,
@@ -56,7 +57,7 @@ export const RADAR_SECTIONS = [
   },
   {
     key: 'semis_ai_tech' as const,
-    label: 'Semis & AI Tech',
+    label: 'Semiconductores e IA',
     icon: 'AT',
     color: '#818cf8',
     hasSignalLayer: true,
@@ -64,7 +65,7 @@ export const RADAR_SECTIONS = [
   },
   {
     key: 'digital_infra_cyber' as const,
-    label: 'Digital Infra & Cyber',
+    label: 'Infraestructura digital y ciber',
     icon: 'DC',
     color: '#38bdf8',
     hasSignalLayer: true,
@@ -72,7 +73,7 @@ export const RADAR_SECTIONS = [
   },
   {
     key: 'trade_sanctions' as const,
-    label: 'Trade & Sanctions',
+    label: 'Comercio y sanciones',
     icon: 'TS',
     color: '#fb7185',
     hasSignalLayer: true,
@@ -109,7 +110,7 @@ const DEFAULT_SINCE = () => Date.now() - 24 * 60 * 60 * 1000;
 function formatDate(isoOrNull: string | null): string {
   if (!isoOrNull) return '';
   try {
-    return new Intl.DateTimeFormat('en-US', {
+    return new Intl.DateTimeFormat('es-ES', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
@@ -123,13 +124,13 @@ function formatDate(isoOrNull: string | null): string {
 
 function toneLabel(tone: number | null): string {
   if (tone == null) return '—';
-  if (tone < -5) return 'Very Negative';
-  if (tone < -2) return 'Negative';
-  if (tone < 0) return 'Slightly Neg.';
-  if (tone === 0) return 'Neutral';
-  if (tone < 2) return 'Slightly Pos.';
-  if (tone < 5) return 'Positive';
-  return 'Very Positive';
+  if (tone < -5) return 'Muy negativo';
+  if (tone < -2) return 'Negativo';
+  if (tone < 0) return 'Algo neg.';
+  if (tone === 0) return 'Neutro';
+  if (tone < 2) return 'Algo pos.';
+  if (tone < 5) return 'Positivo';
+  return 'Muy positivo';
 }
 
 function toneColor(tone: number | null): string {
@@ -205,8 +206,8 @@ function TrendBar({ trend }: TrendBarProps) {
       width={120}
       height={28}
       className="radar-panel__trend-canvas"
-      aria-label="Signal volume trend"
-      title="Volume trend (24h, colored by tone)"
+      aria-label="Tendencia de volumen de señales"
+      title="Tendencia de volumen (24h, color por tono)"
     />
   );
 }
@@ -241,7 +242,7 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setState({ status: 'error', message });
       });
   }, [sectionMeta.key]);
@@ -269,7 +270,7 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
         className="radar-panel__section-hdr"
         onClick={handleToggle}
         aria-expanded={open}
-        aria-label={`${open ? 'Collapse' : 'Expand'} ${sectionMeta.label}`}
+        aria-label={`${open ? 'Contraer' : 'Expandir'} ${sectionMeta.label}`}
         style={{ '--section-color': sectionMeta.color } as React.CSSProperties}
       >
         <span
@@ -286,13 +287,13 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
           <span
             className="radar-panel__tone-badge"
             style={{ color: toneColor(currentTone) }}
-            title={`Avg tone: ${currentTone?.toFixed(1) ?? '—'}`}
+            title={`Tono medio: ${currentTone?.toFixed(1) ?? '—'}`}
           >
             {toneLabel(currentTone)}
           </span>
         )}
         {state.status === 'loading' && (
-          <span className="radar-panel__section-loading" aria-label="Loading" />
+          <span className="radar-panel__section-loading" aria-label="Cargando" />
         )}
         <span className="radar-panel__chevron" aria-hidden="true">
           {open ? '▲' : '▼'}
@@ -306,17 +307,17 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
           {state.status === 'loading' && (
             <div className="state-loading" role="status">
               <div className="spinner" aria-hidden="true" />
-              <span>Loading signals...</span>
+              <span>Cargando señales…</span>
             </div>
           )}
 
           {/* Error */}
           {state.status === 'error' && (
             <div className="state-error" role="alert">
-              <div className="state-error__title">Failed to load signals</div>
+              <div className="state-error__title">Error al cargar las señales</div>
               <div>{state.message}</div>
               <button className="state-error__retry" onClick={load} type="button">
-                Retry
+                Reintentar
               </button>
             </div>
           )}
@@ -325,8 +326,8 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
           {state.status === 'empty' && (
             <div className="state-empty" role="status">
               <div className="state-empty__icon" aria-hidden="true">--</div>
-              <div>No signals in the last 24h</div>
-              <div>Check back later — scheduler updates every 15 min.</div>
+              <div>Sin señales en las últimas 24h</div>
+              <div>Vuelve más tarde — el programador actualiza cada 15 min.</div>
             </div>
           )}
 
@@ -339,10 +340,10 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
                 <span
                   className="radar-panel__tone-label"
                   style={{ color: toneColor(currentTone) }}
-                  title="Average tone of signals in the last 24h (GDELT GKG GlobalEventTone)"
+                  title="Tono medio de las señales en las últimas 24h (GDELT GKG GlobalEventTone)"
                 >
                   {currentTone != null ? currentTone.toFixed(1) : '—'}
-                  <span className="radar-panel__tone-sub"> avg tone</span>
+                  <span className="radar-panel__tone-sub"> tono medio</span>
                 </span>
               </div>
 
@@ -350,7 +351,7 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
               <ul
                 className="radar-panel__headlines"
                 role="list"
-                aria-label={`Top signals for ${sectionMeta.label}`}
+                aria-label={`Señales principales de ${sectionMeta.label}`}
               >
                 {state.signals.map((sig) => (
                   <li key={sig.key} className="radar-panel__headline-row">
@@ -358,7 +359,7 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
                       <span
                         className="radar-panel__headline-tone"
                         style={{ color: toneColor(sig.tone) }}
-                        title={`Tone: ${sig.tone.toFixed(1)}`}
+                        title={`Tono: ${sig.tone.toFixed(1)}`}
                       >
                         {sig.tone.toFixed(1)}
                       </span>
@@ -380,7 +381,7 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
                       </div>
                       <div className="radar-panel__headline-meta">
                         {sig.country && (
-                          <span className="radar-panel__headline-country">{sig.country}</span>
+                          <span className="radar-panel__headline-country">{localizeCountry(sig.country)}</span>
                         )}
                         {sig.occurredAt && (
                           <time
@@ -405,7 +406,7 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
                   <div className="radar-panel__entities">
                     {orgs.length > 0 && (
                       <div className="radar-panel__entity-group">
-                        <div className="radar-panel__entity-label">Organizations</div>
+                        <div className="radar-panel__entity-label">Organizaciones</div>
                         <div className="radar-panel__entity-chips">
                           {orgs.map((e) => (
                             <span key={e} className="radar-panel__entity-chip">
@@ -417,7 +418,7 @@ function SectionAccordion({ sectionMeta, isActive, onSelect }: SectionAccordionP
                     )}
                     {persons.length > 0 && (
                       <div className="radar-panel__entity-group">
-                        <div className="radar-panel__entity-label">People</div>
+                        <div className="radar-panel__entity-label">Personas</div>
                         <div className="radar-panel__entity-chips">
                           {persons.map((e) => (
                             <span key={e} className="radar-panel__entity-chip">
@@ -452,9 +453,9 @@ interface RadarPanelProps {
 export default function RadarPanel({ activeSection, onSectionSelect }: RadarPanelProps) {
   return (
     <div className="radar-panel">
-      <h2 className="radar-panel__heading">Geoeconomic Radar</h2>
+      <h2 className="radar-panel__heading">Radar geoeconómico</h2>
 
-      <div className="radar-panel__sections" role="list" aria-label="Radar sections">
+      <div className="radar-panel__sections" role="list" aria-label="Secciones del radar">
         {RADAR_SECTIONS.map((sec) => (
           <SectionAccordion
             key={sec.key}
@@ -466,7 +467,7 @@ export default function RadarPanel({ activeSection, onSectionSelect }: RadarPane
       </div>
 
       {/* Attribution — always visible (feedback_data_tos / D-107) */}
-      <footer className="radar-panel__attribution" aria-label="Data attribution">
+      <footer className="radar-panel__attribution" aria-label="Atribución de datos">
         <a
           href="https://www.gdeltproject.org"
           target="_blank"

@@ -45,7 +45,7 @@ export default function ChokepointsPanel({ activeChokepoint, onSelect }: Chokepo
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setState({ status: 'error', message });
       });
   }, []);

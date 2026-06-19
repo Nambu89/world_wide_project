@@ -52,7 +52,7 @@ export default function IntelPanel({ onSelect, activeId }: IntelPanelProps) {
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setState({ status: 'error', message });
       });
   }, []);
@@ -98,7 +98,7 @@ export default function IntelPanel({ onSelect, activeId }: IntelPanelProps) {
                 className="intel-card__btn"
                 onClick={() => onSelect?.(c)}
                 aria-pressed={activeId === c.id}
-                aria-label={`Insight: ${c.title}`}
+                aria-label={`Perspectiva: ${c.title}`}
               >
               <div className="intel-card__header">
                 <span className="intel-card__title">{c.title}</span>

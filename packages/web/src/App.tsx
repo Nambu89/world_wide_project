@@ -165,11 +165,11 @@ export default function App() {
   );
 
   const panelTitle =
-    activeTab === 'finance' ? 'Finance'
-    : activeTab === 'events' ? 'Events'
+    activeTab === 'finance' ? 'Finanzas'
+    : activeTab === 'events' ? 'Eventos'
     : activeTab === 'radar' ? 'Radar'
-    : activeTab === 'risk' ? 'Risk'
-    : activeTab === 'convergence' ? 'Convergence'
+    : activeTab === 'risk' ? 'Riesgo'
+    : activeTab === 'convergence' ? 'Convergencia'
     : activeTab === 'chokepoints' ? 'Rutas'
     : 'Inteligencia';
 
@@ -180,7 +180,7 @@ export default function App() {
 
       {/* Layer toggle controls (non-events legacy; event types controlled in panel) */}
       {legacyToggleKeys.length > 0 && (
-        <nav className="layer-toggles" aria-label="Map layer controls">
+        <nav className="layer-toggles" aria-label="Controles de capas del mapa">
           {legacyToggleKeys.map((key) => (
             <button
               key={key}
@@ -188,7 +188,7 @@ export default function App() {
               onClick={() => toggleLayer(key)}
               type="button"
               aria-pressed={activeLayers.has(key)}
-              aria-label={`Toggle ${labelForKey(key)} layer`}
+              aria-label={`Alternar capa ${labelForKey(key)}`}
             >
               {labelForKey(key)}
             </button>
@@ -199,7 +199,7 @@ export default function App() {
       {/* Panel — drawer on mobile, sidebar on desktop */}
       <aside
         className={`panel-wrapper${drawerOpen ? '' : ' collapsed'}`}
-        aria-label="Data panel"
+        aria-label="Panel de datos"
       >
         {/* Drawer handle — only shown on mobile (hidden via CSS on desktop) */}
         <div
@@ -210,14 +210,14 @@ export default function App() {
           tabIndex={0}
           aria-expanded={drawerOpen}
           aria-controls="panel-content"
-          aria-label={drawerOpen ? 'Collapse panel' : 'Expand panel'}
+          aria-label={drawerOpen ? 'Contraer panel' : 'Expandir panel'}
         >
           <span className="panel-handle-title">{panelTitle}</span>
           <div className="panel-handle-bar" aria-hidden="true" />
         </div>
 
         {/* Panel tab switcher */}
-        <div className="panel-tabs" role="tablist" aria-label="Domain panels">
+        <div className="panel-tabs" role="tablist" aria-label="Paneles por dominio">
           <button
             role="tab"
             type="button"
@@ -236,7 +236,7 @@ export default function App() {
             aria-controls="panel-content"
             onClick={() => setActiveTab('finance')}
           >
-            Finance
+            Finanzas
           </button>
           <button
             role="tab"
@@ -246,7 +246,7 @@ export default function App() {
             aria-controls="panel-content"
             onClick={() => setActiveTab('events')}
           >
-            Events
+            Eventos
           </button>
           <button
             role="tab"
@@ -266,7 +266,7 @@ export default function App() {
             aria-controls="panel-content"
             onClick={() => setActiveTab('risk')}
           >
-            Risk
+            Riesgo
           </button>
           <button
             role="tab"
@@ -276,7 +276,7 @@ export default function App() {
             aria-controls="panel-content"
             onClick={() => setActiveTab('convergence')}
           >
-            Convergence
+            Convergencia
           </button>
           <button
             role="tab"

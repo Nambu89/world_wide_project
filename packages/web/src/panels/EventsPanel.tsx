@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getEvents, type GlobalEvent, type EventFilter } from '../api/client';
+import { localizeCountry } from '../i18n/countries';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -32,19 +33,19 @@ const EVENT_TYPE_GROUPS: Array<{
     category: 'natural',
     label: 'Natural',
     types: [
-      { key: 'earthquake', label: 'Earthquakes', icon: 'EQ' },
-      { key: 'wildfire',   label: 'Wildfires',   icon: 'WF' },
-      { key: 'volcano',    label: 'Volcanoes',    icon: 'VL' },
-      { key: 'storm',      label: 'Storms',       icon: 'ST' },
-      { key: 'flood',      label: 'Floods',       icon: 'FL' },
+      { key: 'earthquake', label: 'Terremotos', icon: 'EQ' },
+      { key: 'wildfire',   label: 'Incendios',  icon: 'WF' },
+      { key: 'volcano',    label: 'Volcanes',   icon: 'VL' },
+      { key: 'storm',      label: 'Tormentas',  icon: 'ST' },
+      { key: 'flood',      label: 'Inundaciones', icon: 'FL' },
     ],
   },
   {
     category: 'conflict',
-    label: 'Conflict',
+    label: 'Conflicto',
     types: [
-      { key: 'conflict', label: 'Conflicts', icon: 'CF' },
-      { key: 'protest',  label: 'Protests',  icon: 'PT' },
+      { key: 'conflict', label: 'Conflictos', icon: 'CF' },
+      { key: 'protest',  label: 'Protestas',  icon: 'PT' },
     ],
   },
 ];
@@ -71,8 +72,8 @@ function SeverityBadge({ severity }: SeverityBadgeProps) {
     <span
       className="events-panel__severity"
       style={{ backgroundColor: severityColor(severity) }}
-      aria-label={`Severity ${severity}`}
-      title={`Severity: ${severity}/100`}
+      aria-label={`Severidad ${severity}`}
+      title={`Severidad: ${severity}/100`}
     >
       {Math.round(severity)}
     </span>
@@ -136,7 +137,7 @@ function EventRow({ event }: EventRowProps) {
             {event.country && (
               <>
                 <span className="events-panel__meta-sep" aria-hidden="true">·</span>
-                <span>{event.country}</span>
+                <span>{localizeCountry(event.country)}</span>
               </>
             )}
             {dateStr && (
@@ -200,7 +201,7 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setPanelState({ status: 'error', message });
       });
   }, []);
@@ -217,13 +218,13 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
 
   return (
     <div className="events-panel">
-      <h2 className="events-panel__heading">Global Events</h2>
+      <h2 className="events-panel__heading">Eventos globales</h2>
 
       {/* ----------------------------------------------------------------
           Toggle controls — grouped by category (natural / conflict)
           Each toggle mirrors a toggleKey in layers.config.ts (evt-{type})
           ---------------------------------------------------------------- */}
-      <div className="events-panel__toggles" role="group" aria-label="Event type filters">
+      <div className="events-panel__toggles" role="group" aria-label="Filtros por tipo de evento">
         {EVENT_TYPE_GROUPS.map((group) => (
           <div key={group.category} className="events-panel__toggle-group">
             <div className="events-panel__toggle-group-label" aria-hidden="true">
@@ -240,7 +241,7 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
                     className={`events-panel__toggle-btn${active ? ' active' : ''}`}
                     onClick={() => onToggle(toggleKey)}
                     aria-pressed={active}
-                    aria-label={`Toggle ${t.label}`}
+                    aria-label={`Activar ${t.label}`}
                     title={t.label}
                   >
                     <span className="events-panel__toggle-icon" aria-hidden="true">
@@ -259,9 +260,9 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
           Loading state
           ---------------------------------------------------------------- */}
       {panelState.status === 'loading' && (
-        <div className="state-loading" role="status" aria-label="Loading events">
+        <div className="state-loading" role="status" aria-label="Cargando eventos">
           <div className="spinner" aria-hidden="true" />
-          <span>Loading events...</span>
+          <span>Cargando eventos...</span>
         </div>
       )}
 
@@ -270,10 +271,10 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
           ---------------------------------------------------------------- */}
       {panelState.status === 'error' && (
         <div className="state-error" role="alert">
-          <div className="state-error__title">Failed to load events</div>
+          <div className="state-error__title">Error al cargar eventos</div>
           <div>{panelState.message}</div>
           <button className="state-error__retry" onClick={load} type="button">
-            Retry
+            Reintentar
           </button>
         </div>
       )}
@@ -284,8 +285,8 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
       {panelState.status === 'empty' && (
         <div className="state-empty" role="status">
           <div className="state-empty__icon" aria-hidden="true">--</div>
-          <div>No events above severity {DEFAULT_MIN_SEVERITY}</div>
-          <div>Check back later — the scheduler updates every 15 minutes.</div>
+          <div>Sin eventos por encima de severidad {DEFAULT_MIN_SEVERITY}</div>
+          <div>Vuelve más tarde — el actualizador se ejecuta cada 15 minutos.</div>
         </div>
       )}
 
@@ -295,8 +296,8 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
       {panelState.status === 'ok' && visibleEvents.length === 0 && (
         <div className="state-empty" role="status">
           <div className="state-empty__icon" aria-hidden="true">--</div>
-          <div>All event types are hidden</div>
-          <div>Enable at least one type above to see events.</div>
+          <div>Todos los tipos de evento están ocultos</div>
+          <div>Activa al menos un tipo para ver eventos.</div>
         </div>
       )}
 
@@ -304,7 +305,7 @@ export default function EventsPanel({ activeTypes, onToggle }: EventsPanelProps)
           Events list — top by severity / recency
           ---------------------------------------------------------------- */}
       {panelState.status === 'ok' && visibleEvents.length > 0 && (
-        <ul className="events-panel__list" role="list" aria-label="Top global events">
+        <ul className="events-panel__list" role="list" aria-label="Principales eventos globales">
           {visibleEvents.map((event) => (
             <EventRow key={event.key} event={event} />
           ))}

@@ -17,18 +17,19 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getCii, type CiiCountry, type CiiBand } from '../api/client';
+import { localizeCountry } from '../i18n/countries';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Human-readable band label */
+/** Human-readable band label (Spanish) */
 function bandLabel(band: CiiBand): string {
   switch (band) {
-    case 'low':      return 'Low';
-    case 'moderate': return 'Moderate';
-    case 'elevated': return 'Elevated';
-    case 'high':     return 'High';
+    case 'low':      return 'Bajo';
+    case 'moderate': return 'Moderado';
+    case 'elevated': return 'Elevado';
+    case 'high':     return 'Alto';
   }
 }
 
@@ -56,15 +57,22 @@ function trendColor(trend: 'rising' | 'falling' | 'stable' | null): string {
   return 'var(--color-text-secondary)';
 }
 
-/** Dominant component display label */
+/** Dominant component display label (Spanish) */
 function componentLabel(key: string): string {
   switch (key) {
-    case 'conflict':  return 'Conflict';
-    case 'economic':  return 'Economic';
-    case 'political': return 'Political';
+    case 'conflict':  return 'Conflicto';
+    case 'economic':  return 'Económico';
+    case 'political': return 'Político';
     case 'social':    return 'Social';
     default:          return key;
   }
+}
+
+/** Trend label (Spanish) for titles/aria */
+function trendLabel(trend: 'rising' | 'falling' | 'stable' | null): string {
+  if (trend === 'rising')  return 'subiendo';
+  if (trend === 'falling') return 'bajando';
+  return 'estable';
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +113,7 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : 'Error desconocido';
         setState({ status: 'error', message });
       });
   }, []);
@@ -117,23 +125,23 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
 
   return (
     <div className="risk-panel">
-      <h2 className="risk-panel__heading">Country Risk (CII)</h2>
+      <h2 className="risk-panel__heading">Riesgo país (CII)</h2>
 
       {/* Loading */}
       {state.status === 'loading' && (
         <div className="state-loading" role="status">
           <div className="spinner" aria-hidden="true" />
-          <span>Loading CII scores...</span>
+          <span>Cargando puntuaciones CII…</span>
         </div>
       )}
 
       {/* Error */}
       {state.status === 'error' && (
         <div className="state-error" role="alert">
-          <div className="state-error__title">Failed to load CII data</div>
+          <div className="state-error__title">Error al cargar datos CII</div>
           <div>{state.message}</div>
           <button className="state-error__retry" onClick={load} type="button">
-            Retry
+            Reintentar
           </button>
         </div>
       )}
@@ -142,14 +150,14 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
       {state.status === 'empty' && (
         <div className="state-empty" role="status">
           <div className="state-empty__icon" aria-hidden="true">--</div>
-          <div>No CII scores available yet</div>
-          <div>Check back later — CII is computed from events data.</div>
+          <div>Aún no hay puntuaciones CII</div>
+          <div>Vuelve más tarde — el CII se calcula a partir de los eventos.</div>
         </div>
       )}
 
       {/* Data */}
       {state.status === 'ok' && (
-        <ul className="risk-panel__list" role="list" aria-label="Countries by risk score">
+        <ul className="risk-panel__list" role="list" aria-label="Países por puntuación de riesgo">
           {state.countries.map((c) => (
             <li
               key={c.country}
@@ -160,16 +168,16 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
                 type="button"
                 className="risk-panel__row-btn"
                 onClick={() => onCountrySelect(c.country)}
-                aria-label={`Select ${c.country} — composite risk ${c.composite}`}
+                aria-label={`Seleccionar ${localizeCountry(c.country)} — riesgo compuesto ${c.composite}`}
                 aria-pressed={activeCountry === c.country}
               >
                 {/* Country name + band */}
                 <div className="risk-panel__row-header">
-                  <span className="risk-panel__country-name">{c.country}</span>
+                  <span className="risk-panel__country-name">{localizeCountry(c.country)}</span>
                   <span
                     className="risk-panel__band-badge"
                     style={{ color: bandColorVar(c.band), borderColor: bandColorVar(c.band) }}
-                    title={`Band: ${bandLabel(c.band)}`}
+                    title={`Banda: ${bandLabel(c.band)}`}
                   >
                     {bandLabel(c.band)}
                   </span>
@@ -189,7 +197,7 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
                   <span
                     className="risk-panel__composite-num"
                     style={{ color: bandColorVar(c.band) }}
-                    title="Composite CII score (0-100)"
+                    title="Puntuación CII compuesta (0-100)"
                   >
                     {c.composite.toFixed(1)}
                   </span>
@@ -198,8 +206,8 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
                   <span
                     className="risk-panel__trend-arrow"
                     style={{ color: trendColor(c.trend) }}
-                    title={`Trend: ${c.trend ?? 'stable'}`}
-                    aria-label={`Trend: ${c.trend ?? 'stable'}`}
+                    title={`Tendencia: ${trendLabel(c.trend)}`}
+                    aria-label={`Tendencia: ${trendLabel(c.trend)}`}
                   >
                     {trendArrow(c.trend)}
                   </span>
@@ -209,14 +217,14 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
                 <div className="risk-panel__row-meta">
                   <span className="risk-panel__dynamic-score">
                     {c.dynamicScore != null
-                      ? `Dynamic: ${c.dynamicScore.toFixed(1)}`
-                      : 'Sin tendencia aun'}
+                      ? `Dinámico: ${c.dynamicScore.toFixed(1)}`
+                      : 'Sin tendencia aún'}
                   </span>
 
                   {c.dominantComponent && (
                     <span
                       className="risk-panel__dom-component"
-                      title={`Dominant driver: ${componentLabel(c.dominantComponent.key)} (score ${c.dominantComponent.score.toFixed(1)})`}
+                      title={`Motor dominante: ${componentLabel(c.dominantComponent.key)} (puntuación ${c.dominantComponent.score.toFixed(1)})`}
                     >
                       {componentLabel(c.dominantComponent.key)}{' '}
                       <span className="risk-panel__dom-score">
@@ -232,7 +240,7 @@ export default function RiskPanel({ activeCountry, onCountrySelect }: RiskPanelP
       )}
 
       {/* Attribution — always visible (D-107 / feedback_data_tos) */}
-      <footer className="risk-panel__attribution" aria-label="Data attribution">
+      <footer className="risk-panel__attribution" aria-label="Atribución de datos">
         CII propio{' '}
         <span className="risk-panel__attr-sep" aria-hidden="true">·</span>{' '}
         datos:{' '}
