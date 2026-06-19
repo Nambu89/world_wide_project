@@ -89,49 +89,57 @@ map.on('style.load', () => {
 
 **Interfaces:** Produces: rotación rAF; limpia rAF + timers en el unmount.
 
-- [ ] **Step 1:** En el init `useEffect`, tras registrar el map y el globo, añadir el bucle de rotación. Declarar arriba de `MapView` la constante:
+> **Corrección ISSUE-2 (plan-checker):** el rAF NO arranca en el cuerpo del effect — `setProjection` es asíncrono (`style.load`), así que arrancar el spin en el cuerpo giraría el **mapa plano** antes de que exista el globo/capas. El rAF arranca **DENTRO del `style.load` handler** (tras `setProjection`/`setSky`); `rafId`/`resumeTimer` se declaran en el scope del effect para que el cleanup los cancele.
+
+- [ ] **Step 1:** Declarar arriba de `MapView` las constantes:
 
 ```ts
 const ROTATE_DEG_PER_FRAME = 0.06;   // ~3.5°/s a 60fps (D-1103)
 const SPIN_RESUME_MS = 4000;         // reanuda 4s tras la última interacción
 ```
 
-Dentro del effect (antes del `return` de cleanup):
+- [ ] **Step 2:** En el cuerpo del init `useEffect`, declarar los handles que el cleanup necesita (scope del effect):
 
 ```ts
-// D-1103: slow auto-rotation; pauses on user gesture + during map-tie flyTo (isEasing),
-// resumes after idle. No Date.now()/Math.random() — uses setTimeout + the rAF loop.
-let spinPaused = false;
-let resumeTimer: ReturnType<typeof setTimeout> | undefined;
-const pauseSpin = () => {
-  spinPaused = true;
-  clearTimeout(resumeTimer);
-  resumeTimer = setTimeout(() => { spinPaused = false; }, SPIN_RESUME_MS);
-};
-const gestures = ['mousedown', 'dragstart', 'zoomstart', 'wheel', 'click'] as const;
-for (const ev of gestures) map.on(ev, pauseSpin);
-
 let rafId = 0;
-const spin = () => {
-  // Skip while a user gesture paused us, while a programmatic flyTo eases (map-tie),
-  // or when the tab is hidden. Our own setCenter is instantaneous (not "easing").
-  if (!spinPaused && !map.isEasing() && !document.hidden) {
-    const c = map.getCenter();
-    map.setCenter([c.lng + ROTATE_DEG_PER_FRAME, c.lat]);
-  }
-  rafId = requestAnimationFrame(spin);
-};
-rafId = requestAnimationFrame(spin);
+let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 ```
 
-- [ ] **Step 2:** En el `return () => { … }` de cleanup del effect (donde ya hace `map.remove()`), añadir ANTES de `map.remove()`:
+- [ ] **Step 3:** DENTRO del `map.on('style.load', …)` (el mismo de Task 2/3), tras `setProjection`/`setSky`, arrancar la rotación:
+
+```ts
+  // D-1103: slow auto-rotation, started ONLY after the globe is live (ISSUE-2 fix).
+  // Pauses on user gesture + during map-tie flyTo (isEasing); resumes after idle.
+  // No Date.now()/Math.random() — uses setTimeout + the rAF loop.
+  let spinPaused = false;
+  const pauseSpin = () => {
+    spinPaused = true;
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(() => { spinPaused = false; }, SPIN_RESUME_MS);
+  };
+  for (const ev of ['mousedown', 'dragstart', 'zoomstart', 'wheel', 'click'] as const) {
+    map.on(ev, pauseSpin);
+  }
+  const spin = () => {
+    // Skip while a user gesture paused us, while a programmatic flyTo eases (map-tie),
+    // or when the tab is hidden. Our own setCenter is instantaneous (not "easing").
+    if (!spinPaused && !map.isEasing() && !document.hidden) {
+      const c = map.getCenter();
+      map.setCenter([c.lng + ROTATE_DEG_PER_FRAME, c.lat]);
+    }
+    rafId = requestAnimationFrame(spin);
+  };
+  rafId = requestAnimationFrame(spin);
+```
+
+- [ ] **Step 4:** En el `return () => { … }` de cleanup del effect (donde ya hace `map.remove()`), añadir ANTES de `map.remove()`:
 
 ```ts
       cancelAnimationFrame(rafId);
       clearTimeout(resumeTimer);
 ```
 
-(Nota: `rafId`/`resumeTimer` están en el scope del effect — accesibles en el cleanup.)
+(`rafId`/`resumeTimer` viven en el scope del effect — asignados dentro de `style.load`, accesibles en el cleanup.)
 
 - [ ] **Step 3:** tsc + build. Expected: EXIT 0 + OK.
 - [ ] **Step 4:** Smoke EN VIVO: el globo gira lento; al arrastrar/zoom/click se para; reanuda ~4s tras soltar; **seleccionar un país en un panel (flyTo) NO pelea con el spin** (la rotación pausa durante el vuelo por `isEasing()`).
@@ -144,7 +152,20 @@ rafId = requestAnimationFrame(spin);
 **Files:** Modify (si hace falta) `packages/web/slice-d-e2e.mjs` / `redesign-e2e.mjs`; `plans/DECISIONS.md` (ADR-020), `plans/ROADMAP.md`
 
 - [ ] **Step 1:** Gates: `pnpm -r exec tsc --noEmit` (EXIT 0) · `npx tsc --noEmit -p tsconfig.json` (EXIT 0) · `pnpm test` (351/0, glow.test sigue) · `node --import tsx --test server.test.ts` (72/0, sin cambios) · `pnpm --filter @www/web build` (OK).
-- [ ] **Step 2:** `slice-d-e2e.mjs` sobre el globo (backend+vite) → **PASS**. El click→popup usa `window.__wwMap.project()` que en globo devuelve el píxel correcto; si un click cerca del limbo falla, el E2E elige features in-bounds (ya lo hace). Si algo rompe, ajustar selector/posición — NO degradar Slice D (D-1105).
+- [ ] **Step 2a (corrección ISSUE-1 — PRIMERO):** parchear `pickFeaturePixel` en `slice-d-e2e.mjs` (líneas ~38-48) con un **back-face cull**: en globo, `project()` devuelve un píxel también para puntos de la cara OCULTA de la esfera (caen dentro del viewport pero no son clicables → click flaky/falso verde). Tras `m.project(coords)`, descartar por round-trip `unproject`:
+
+```js
+const p = m.project(f.geometry.coordinates);
+// globe back-face cull: a hidden-hemisphere point projects inside the viewport but
+// unprojects to a DIFFERENT lng/lat (the front-face hit). Skip those. (no-op on flat map)
+const back = m.unproject([p.x, p.y]);
+const dLng = Math.abs((((back.lng - f.geometry.coordinates[0]) + 540) % 360) - 180);
+const dLat = Math.abs(back.lat - f.geometry.coordinates[1]);
+if (dLng > 1 || dLat > 1) continue;   // hidden face — not clickable
+```
+
+  Aplicar el mismo guard al `evaluate` inline de `redesign-e2e.mjs` (CHECK 4, su pick de feature). Es no-op en mapa plano (round-trip exacto) → retrocompatible.
+- [ ] **Step 2b:** `slice-d-e2e.mjs` sobre el globo (backend+vite) → **PASS** (con el cull, el click pega en una feature de la cara visible). Si algo más rompe, ajustar — NO degradar Slice D (D-1105).
 - [ ] **Step 3:** `redesign-e2e.mjs` sobre el globo → **PASS** (canvas presente, tabs mono, popup HUD cian, 375px). Añadir, si es barato, un check de que `window.__wwMap.getProjection().type === 'globe'`.
 - [ ] **Step 4:** Smoke EN VIVO final: globo + atmósfera + glow + chrome HUD + rotación; click→popup HUD ES; Traducir (Slice D); seleccionar país→flyTo pausa el spin. Screenshot.
 - [ ] **Step 5:** `plans/DECISIONS.md` ADR-020 (D-1100..D-1105). `plans/ROADMAP.md`: Fase 6 Slice 2 ✅ (rediseño UI completo 2/2).
