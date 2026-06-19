@@ -32,6 +32,9 @@ import {
 } from '../api/client';
 import { buildPopupNode } from './popup';
 
+/** D-1001: dark vector basemap (CARTO dark-matter GL style, keyless + attribution). */
+const DARK_STYLE_URL = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+
 /**
  * Layer ids that respond to clicks with a popup (Slice D / D-900). Derived from
  * the same config arrays MapView iterates — heatmaps excluded (no clickable
@@ -248,35 +251,19 @@ export default function MapView({ activeLayers, activeCountry, activeChokepoint 
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      // Zero-key OSM raster basemap
-      style: {
-        version: 8,
-        sources: {
-          'osm-tiles': {
-            type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256,
-            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-          },
-        },
-        layers: [
-          {
-            id: 'osm-background',
-            type: 'raster',
-            source: 'osm-tiles',
-            paint: {
-              'raster-opacity': 0.85,
-              'raster-saturation': -0.3,
-              'raster-brightness-min': 0.05,
-            },
-          },
-        ],
-      },
+      // D-1001: dark vector basemap (CARTO dark-matter, keyless) replaces raster-OSM.
+      style: DARK_STYLE_URL,
       center: [0, 20],
       zoom: 2,
       minZoom: 1,
       maxZoom: 18,
       attributionControl: { compact: true },
+    });
+
+    // ponytail: basemap unreachable → dark container bg (CSS) + log; the app survives
+    // (data/panels fetch independently). No setStyle fallback (it drops sources/data).
+    map.on('error', (e) => {
+      console.warn('[map] style/source error:', e?.error?.message ?? e);
     });
 
     mapRef.current = map;
