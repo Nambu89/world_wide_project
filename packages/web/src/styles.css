@@ -119,12 +119,27 @@ html, body, #root {
   background-color: var(--color-bg-surface);
   border-top-left-radius: var(--rounded-lg);
   border-top-right-radius: var(--rounded-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-lg), inset 0 0 40px rgba(14, 165, 233, 0.05);
+  border: 1px solid var(--accent-dim);
   display: flex;
   flex-direction: column;
   transition: transform 0.3s ease;
   z-index: 10;
 }
+
+/* HUD corner brackets (D-1004) */
+.panel-wrapper::before,
+.panel-wrapper::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+  z-index: 12;
+}
+.panel-wrapper::before { top: 6px; left: 6px; border-right: 0; border-bottom: 0; }
+.panel-wrapper::after { bottom: 6px; right: 6px; border-left: 0; border-top: 0; }
 
 .panel-wrapper.collapsed {
   transform: translateY(calc(100% - var(--drawer-handle-height)));
@@ -151,11 +166,12 @@ html, body, #root {
 .panel-handle-title {
   position: absolute;
   left: var(--space-4);
+  font-family: var(--mono);
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
+  color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 8px var(--accent-glow);
 }
 
 .panel-content {
@@ -212,21 +228,24 @@ html, body, #root {
 
 .layer-toggle-btn {
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--rounded-pill);
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--accent-dim);
+  background: var(--color-bg-elevated);
+  color: #7b8aa0;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   cursor: pointer;
   min-height: var(--touch-target-min);
   min-width: var(--touch-target-min);
-  transition: background-color 0.15s, color 0.15s;
+  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
 }
 
 .layer-toggle-btn.active {
-  background-color: var(--color-accent);
-  color: #fff;
+  border-color: var(--accent);
+  color: #a5f3fc;
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .layer-toggle-btn:hover:not(.active) {
@@ -595,14 +614,36 @@ html, body, #root {
 }
 
 .intel-card {
+  position: relative;
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--space-3) + 4px);
   background-color: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: var(--rounded-md);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--rounded-sm);
+  overflow: hidden;
+}
+
+/* HUD severity accent bar (D-1005). data-sev set by IntelPanel. */
+.intel-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--color-warning);
+  box-shadow: 0 0 12px 2px var(--color-warning);
+}
+.intel-card[data-sev="alta"]::before {
+  background: var(--color-danger);
+  box-shadow: 0 0 12px 2px var(--color-danger);
+}
+.intel-card[data-sev="baja"]::before {
+  background: var(--color-success);
+  box-shadow: 0 0 12px 2px var(--color-success);
 }
 
 .intel-card__header {
@@ -620,11 +661,14 @@ html, body, #root {
 
 .intel-card__severity {
   flex-shrink: 0;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  padding: 1px var(--space-2);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: var(--font-weight-bold);
+  padding: 2px var(--space-2);
   border: 1px solid;
-  border-radius: var(--rounded-md);
+  border-radius: 0;
 }
 
 .intel-card__meta {
@@ -646,12 +690,14 @@ html, body, #root {
 }
 
 .intel-card__chip {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: #7dd3fc;
   background-color: transparent;
-  border: 1px solid var(--color-border);
-  border-radius: var(--rounded-md);
-  padding: 0 var(--space-2);
+  border: 1px solid var(--accent-dim);
+  border-radius: 0;
+  padding: 2px var(--space-2);
 }
 
 .intel-card__consequences {
@@ -716,8 +762,9 @@ html, body, #root {
 }
 
 .intel-card.active {
-  border-color: var(--color-accent);
-  background-color: rgba(59, 130, 246, 0.08);
+  border-color: var(--accent);
+  background-color: rgba(34, 211, 238, 0.08);
+  box-shadow: 0 0 0 1px var(--accent-glow);
 }
 
 .intel-card__btn:hover .intel-card__title {
@@ -741,9 +788,11 @@ html, body, #root {
   padding: var(--space-2) var(--space-3);
   background: transparent;
   border: none;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
+  color: #5f7b96;
+  font-family: var(--mono);   /* HUD: mono uppercase (D-1004) */
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   cursor: pointer;
   min-height: var(--touch-target-min);
   transition: color 0.15s, border-bottom-color 0.15s;
@@ -752,8 +801,9 @@ html, body, #root {
 }
 
 .panel-tab.active {
-  color: var(--color-accent);
-  border-bottom-color: var(--color-accent);
+  color: #eaf2f9;
+  border-bottom-color: var(--accent);
+  text-shadow: 0 0 10px var(--accent-glow);
 }
 
 .panel-tab:hover:not(.active) {
@@ -1290,31 +1340,48 @@ html, body, #root {
 }
 
 /* ============================================================
-   Slice D — click popup (dark theme to match the app)
+   Slice D popup — re-skinned to HUD command-center (D-1006, CSS only)
    ============================================================ */
 .maplibregl-popup-content {
-  background: var(--color-bg-elevated);
+  position: relative;
+  background: var(--panel);
   color: var(--color-text-primary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 6px);
-  padding: var(--space-3);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  padding: 11px 13px;
+  box-shadow: 0 0 0 1px #04080f, 0 10px 30px rgba(0, 0, 0, 0.6);
 }
-.maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--color-bg-elevated); }
-.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--color-bg-elevated); }
-.maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--color-bg-elevated); }
-.maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--color-bg-elevated); }
-.maplibregl-popup-close-button { color: var(--color-text-secondary); font-size: 16px; }
+/* HUD corner bracket on the popup */
+.maplibregl-popup-content::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-right: 0;
+  border-bottom: 0;
+}
+.maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--accent); }
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--accent); }
+.maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--accent); }
+.maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--accent); }
+.maplibregl-popup-close-button { color: #5f7b96; font-size: 16px; }
 
-.map-popup { font-size: var(--font-size-sm); line-height: 1.4; max-width: 300px; }
+.map-popup { font-size: 12px; line-height: 1.5; max-width: 300px; }
 .map-popup__heading {
+  font-family: var(--mono);
   font-weight: var(--font-weight-bold);
-  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--accent-glow);
   margin-bottom: var(--space-2);
   padding-right: var(--space-4);
 }
-.map-popup__row { color: var(--color-text-primary); }
-.map-popup__label { color: var(--color-text-secondary); }
+.map-popup__row { font-family: var(--mono); font-size: 11px; color: #aebfd0; }
+.map-popup__label { font-family: var(--mono); color: #5f7b96; }
 .map-popup__title {
   margin-top: var(--space-2);
   font-style: italic;
@@ -1322,12 +1389,15 @@ html, body, #root {
 }
 .map-popup__translate {
   margin-top: var(--space-2);
-  background: var(--color-accent);
-  color: #fff;
+  background: var(--accent);
+  color: #06121a;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: 0;
   padding: var(--space-1) var(--space-2);
-  font-size: var(--font-size-xs);
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
   cursor: pointer;
 }
 .map-popup__translate:hover { background: var(--color-accent-hover); }

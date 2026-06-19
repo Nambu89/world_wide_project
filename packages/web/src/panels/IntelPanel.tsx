@@ -92,7 +92,7 @@ export default function IntelPanel({ onSelect, activeId }: IntelPanelProps) {
       {state.status === 'ok' && (
         <ul className="intel-list" role="list" aria-label="Tarjetas de inteligencia por severidad">
           {state.result.insights.map((c) => (
-            <li key={c.id} className={`intel-card${activeId === c.id ? ' active' : ''}`} role="listitem">
+            <li key={c.id} data-sev={c.severity} className={`intel-card${activeId === c.id ? ' active' : ''}`} role="listitem">
               <button
                 type="button"
                 className="intel-card__btn"
