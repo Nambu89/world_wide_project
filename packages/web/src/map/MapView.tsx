@@ -35,6 +35,10 @@ import { buildPopupNode } from './popup';
 /** D-1001: dark vector basemap (CARTO dark-matter GL style, keyless + attribution). */
 const DARK_STYLE_URL = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
+/** Slice 2 globe auto-rotation (D-1103). */
+const ROTATE_DEG_PER_FRAME = 0.06; // ~3.5°/s at 60fps
+const SPIN_RESUME_MS = 4000;       // resume 4s after the last interaction
+
 /**
  * Layer ids that respond to clicks with a popup (Slice D / D-900). Derived from
  * the same config arrays MapView iterates — heatmaps excluded (no clickable
@@ -274,6 +278,46 @@ export default function MapView({ activeLayers, activeCountry, activeChokepoint 
       (window as unknown as { __wwMap?: MapLibreMap }).__wwMap = map;
     }
 
+    // Slice 2 globe — handles live in the effect scope so cleanup can cancel them.
+    let rafId = 0;
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // D-1101/D-1102/D-1103: enable the globe + atmosphere + rotation ONCE the style has
+    // loaded (setProjection before style.load throws; rotation must not spin the flat map).
+    map.on('style.load', () => {
+      try {
+        map.setProjection({ type: 'globe' }); // D-1101
+      } catch (err) {
+        console.warn('[globe] projection unavailable:', err);
+      }
+      try {
+        // D-1102: atmospheric halo (optional — globe renders fine without it).
+        map.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0] });
+      } catch (err) {
+        console.warn('[globe] sky unavailable:', err);
+      }
+
+      // D-1103: slow auto-rotation, started only after the globe is live. Pauses on user
+      // gesture + during map-tie flyTo (isEasing); resumes after idle. No Date.now().
+      let spinPaused = false;
+      const pauseSpin = () => {
+        spinPaused = true;
+        clearTimeout(resumeTimer);
+        resumeTimer = setTimeout(() => { spinPaused = false; }, SPIN_RESUME_MS);
+      };
+      for (const ev of ['mousedown', 'dragstart', 'zoomstart', 'wheel', 'click'] as const) {
+        map.on(ev, pauseSpin);
+      }
+      const spin = () => {
+        if (!spinPaused && !map.isEasing() && !document.hidden) {
+          const c = map.getCenter();
+          map.setCenter([c.lng + ROTATE_DEG_PER_FRAME, c.lat]);
+        }
+        rafId = requestAnimationFrame(spin);
+      };
+      rafId = requestAnimationFrame(spin);
+    });
+
     map.on('load', () => {
       // Register all sources declared in LAYERS as empty GeoJSON
       for (const sourceId of LAYER_SOURCES) {
@@ -341,6 +385,8 @@ export default function MapView({ activeLayers, activeCountry, activeChokepoint 
 
     return () => {
       mapReadyRef.current = false;
+      cancelAnimationFrame(rafId);   // D-1103: stop rotation loop + resume timer
+      clearTimeout(resumeTimer);
       map.remove();
       mapRef.current = null;
     };
