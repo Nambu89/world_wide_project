@@ -35,12 +35,23 @@ async function run() {
   const tabFont = await page.locator('.panel-tab.active').first().evaluate((el) => getComputedStyle(el).fontFamily).catch(() => '');
   rec('CHECK 3 — active tab is monospace', /mono|consolas|cascadia/i.test(tabFont), tabFont.slice(0, 40));
 
-  // 4 — open a popup, assert HUD cyan border (rgb 34,211,238)
+  // 3b — globe projection active (Slice 2)
+  const proj = await page.evaluate(() => { try { return window.__wwMap?.getProjection?.()?.type ?? ''; } catch { return ''; } });
+  rec('CHECK 3b — globe projection active', proj === 'globe', `projection=${proj}`);
+
+  // 4 — open a popup, assert HUD cyan border (rgb 34,211,238). Back-face cull for globe.
   const px = await page.evaluate(() => {
     const m = window.__wwMap; if (!m) return null;
-    const f = m.queryRenderedFeatures(undefined, { layers: ['chokepoints', 'cii-countries', 'sanctions-countries'].filter((id) => m.getLayer(id)) })[0];
-    if (!f || f.geometry.type !== 'Point') return null;
-    const p = m.project(f.geometry.coordinates); return { x: p.x, y: p.y };
+    const feats = m.queryRenderedFeatures(undefined, { layers: ['chokepoints', 'cii-countries', 'sanctions-countries'].filter((id) => m.getLayer(id)) });
+    for (const f of feats) {
+      if (!f.geometry || f.geometry.type !== 'Point') continue;
+      const p = m.project(f.geometry.coordinates);
+      const back = m.unproject([p.x, p.y]);
+      const dLng = Math.abs((((back.lng - f.geometry.coordinates[0]) + 540) % 360) - 180);
+      if (dLng > 1 || Math.abs(back.lat - f.geometry.coordinates[1]) > 1) continue; // hidden face
+      return { x: p.x, y: p.y };
+    }
+    return null;
   });
   if (px) {
     const box = await page.locator('.map-container').boundingBox();

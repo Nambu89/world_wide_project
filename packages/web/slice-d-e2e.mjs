@@ -42,6 +42,12 @@ async function pickFeaturePixel(page, layers, { maxXFrac = 0.6, requireTitle = f
       if (!f.geometry || f.geometry.type !== 'Point') continue;
       if (requireTitle && !(f.properties && String(f.properties.title || '').trim())) continue;
       const p = m.project(f.geometry.coordinates);
+      // globe back-face cull (ISSUE-1): hidden-hemisphere points project inside the
+      // viewport but unproject to a DIFFERENT lng/lat. Skip them. (no-op on flat map)
+      const back = m.unproject([p.x, p.y]);
+      const dLng = Math.abs((((back.lng - f.geometry.coordinates[0]) + 540) % 360) - 180);
+      const dLat = Math.abs(back.lat - f.geometry.coordinates[1]);
+      if (dLng > 1 || dLat > 1) continue;
       if (p.x > 30 && p.x < W * maxXFrac && p.y > 80 && p.y < H - 80) {
         const id = f.layer.id;
         return { x: p.x, y: p.y, layerId: id, freeText: id.startsWith('evt-') || id.startsWith('sig-') };
