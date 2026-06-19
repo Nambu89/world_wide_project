@@ -14,7 +14,7 @@
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
-import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, CONVERGENCE_LAYERS, SANCTIONS_LAYERS, CHOKEPOINT_LAYERS, LAYER_SOURCES } from './layers.config';
+import { LAYERS, SIGNAL_LAYERS, CII_LAYERS, CONVERGENCE_LAYERS, SANCTIONS_LAYERS, CHOKEPOINT_LAYERS, GLOW_LAYERS, LAYER_SOURCES } from './layers.config';
 import {
   getEvents,
   getSignals,
@@ -286,7 +286,7 @@ export default function MapView({ activeLayers, activeCountry, activeChokepoint 
       }
 
       // Add all layers by iterating LAYERS + SIGNAL_LAYERS + CII_LAYERS + CONVERGENCE_LAYERS — NEVER add layers outside this loop
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS]) {
+      for (const spec of [...GLOW_LAYERS, ...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS]) {
         if (map.getLayer(spec.id)) continue;
 
         // Build a plain object and cast to LayerSpecification at the call site.
@@ -353,7 +353,7 @@ export default function MapView({ activeLayers, activeCountry, activeChokepoint 
 
     const apply = () => {
       if (!mapReadyRef.current) return;
-      for (const spec of [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS]) {
+      for (const spec of [...GLOW_LAYERS, ...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS]) {
         if (!map.getLayer(spec.id)) continue;
         const visible = spec.visibleWhen(activeLayers);
         map.setLayoutProperty(spec.id, 'visibility', visible ? 'visible' : 'none');

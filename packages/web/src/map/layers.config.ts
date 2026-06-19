@@ -643,7 +643,50 @@ export const CHOKEPOINT_LAYERS: LayerSpec[] = [
   },
 ];
 
-/** All unique source ids needed by all layer arrays */
+// ---------------------------------------------------------------------------
+// GLOW_LAYERS — soft halo twin under each circle marker (D-1002, osiris pattern)
+//
+// For every circle layer, derive a '-glow' twin: same source/filter/visibility,
+// but blurred + larger + low-opacity, painted BELOW the crisp dot. Heatmaps are
+// excluded (already density). Glow layers are NON-interactive (MapView excludes
+// '-glow' from INTERACTIVE_LAYER_IDS).
+// ---------------------------------------------------------------------------
+
+const GLOW_SCALE = 2.2;
+
+/** Derive the glow twin of a circle LayerSpec. */
+export function glowOf(spec: LayerSpec): LayerSpec {
+  const r = spec.paint?.['circle-radius'] as unknown;
+  const radius = Array.isArray(r)
+    ? ['*', r, GLOW_SCALE]
+    : typeof r === 'number'
+      ? r * GLOW_SCALE
+      : 14;
+  return {
+    ...spec,
+    id: spec.id + '-glow',
+    paint: {
+      'circle-color': spec.paint?.['circle-color'] ?? '#22d3ee',
+      'circle-blur': 1,
+      'circle-opacity': 0.45,
+      'circle-radius': radius,
+    },
+  };
+}
+
+/** Glow twin of every circle layer (heatmap excluded). */
+export const GLOW_LAYERS: LayerSpec[] = [
+  ...LAYERS,
+  ...SIGNAL_LAYERS,
+  ...CII_LAYERS,
+  ...CONVERGENCE_LAYERS,
+  ...SANCTIONS_LAYERS,
+  ...CHOKEPOINT_LAYERS,
+]
+  .filter((l) => l.type === 'circle')
+  .map(glowOf);
+
+/** All unique source ids needed by all layer arrays (glow reuses the same sources) */
 export const LAYER_SOURCES = [
   ...new Set(
     [...LAYERS, ...SIGNAL_LAYERS, ...CII_LAYERS, ...CONVERGENCE_LAYERS, ...SANCTIONS_LAYERS, ...CHOKEPOINT_LAYERS].map((l) => l.source)
