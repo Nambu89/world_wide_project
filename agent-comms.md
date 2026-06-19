@@ -150,4 +150,8 @@
 
 ## [2026-06-19] [VERIFIER] [VERIFIED] UI Redesign Slice 1 (command-center reskin) — backend/store/motor intactos (diff HEAD~6 vacío), MapLibre sigue v4, tokens/glow(top-level radius)/popup-CSS/IntelPanel verificados, Slice D preservado. Gates: tsc EXIT 0, suite 351/0, server 72/0, web build OK. slice-d-e2e 11/0 + redesign-e2e 5/5. **Fase 6 Slice 1 CERRADA; Slice 2 = globo (v5).**
 
+## [2026-06-19] [VERIFIER] [VERIFIED] UI Redesign Slice 2 (globo 3D) — 16/16 condiciones OK. NG-1 confirmado (diff Slice 2 = solo web/package.json + MapView.tsx + lock). setProjection/setSky/rAF todos dentro de style.load (ISSUE-2 resuelto). Cleanup cancela rAF+timer. Back-face cull en ambos E2E. Gates: tsc EXIT 0 (0 errores), suite 351/0, server 72/0, vite build EXIT 0 (14 s). ADR-020 registrado. Fase 6 COMPLETA (2/2).
+
 ## [2026-06-19] [PM] [DONE] — **Rediseño UI Slice 2 (globo 3D) CERRADO — Fase 6 COMPLETA (2/2).** MapLibre v4.7→v5.24 (+@types/geojson, breaking cazado por tsc) + globo `setProjection` en `style.load` + atmósfera `setSky` + rotación rAF (pausa en gesto/flyTo via isEasing, reanuda 4s). plan-checker cazó 2 issues (back-face cull E2E + orden rAF) → resueltos. slice-d-e2e 13/13 (Traducir en vivo sobre la esfera) + redesign-e2e 6/6 (projection=globe). NO toca backend/store/motor. PENDIENTE usuario: verifier (lanzado) + push.
+
+## [2026-06-19] [VERIFIER] [VERIFIED] UI Redesign Slice 2 (globo 3D) — 16/16 condiciones OK. NG-1 confirmado (diff = solo web/package.json + MapView + lock). setProjection/setSky/rAF todos dentro de style.load (ISSUE-2 resuelto). Cleanup cancela rAF+timer. Back-face cull en ambos E2E. Gates: tsc EXIT 0, suite 351/0, server 72/0, build OK. **Fase 6 COMPLETA (2/2).**
