@@ -82,3 +82,6 @@ desktop.ini
 # --- Logs ---
 *.log
 logs/
+
+# Visual brainstorm companion (local only)
+.superpowers/
